@@ -1,0 +1,4 @@
+linkedin-scraper>=3.1.1
+playwright>=1.58.0
+openpyxl>=3.1.5
+python-dotenv>=1.2.2

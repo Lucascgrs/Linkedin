@@ -1,2 +1,8 @@
+linkedin_session.json
 *.json
 /venv
+__pycache__/
+*.pyc
+*.pyo
+output/
+.env
