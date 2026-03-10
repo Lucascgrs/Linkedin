@@ -24,11 +24,12 @@ linkedin/
 │   └── messenger.py            # LinkedInMessenger
 └── utils/
     ├── __init__.py
+    ├── stealth_browser.py      # StealthBrowser (anti-bot Playwright context)
     ├── session.py              # SessionManager
     ├── export.py               # ExportUtils (JSON + Excel)
     └── filters.py              # GEO_IDS, INDUSTRY_IDS, … + resolve helpers
 
-Sessions.py          # Creates / saves the LinkedIn session (run once)
+Sessions.py          # Entry point: creates / saves the LinkedIn session (run once)
 main.py              # Usage examples
 requirements.txt     # Dependencies
 ```
@@ -70,13 +71,10 @@ All examples are in `main.py`. Run one by un-commenting it in the `__main__` blo
 ### Example 1 — Search companies
 
 ```python
-from linkedin_scraper import BrowserManager
-from linkedin.utils.session import SessionManager
-from linkedin.utils.export import ExportUtils
-from linkedin.search.company_search import CompanySearch
+from linkedin import StealthBrowser, SessionManager, ExportUtils, CompanySearch
 
 async def exemple_recherche_entreprises():
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         search = CompanySearch(browser.page)
         results = await search.search_and_scrape(
@@ -92,10 +90,10 @@ async def exemple_recherche_entreprises():
 ### Example 2 — Search job offers
 
 ```python
-from linkedin.search.job_search import JobSearch
+from linkedin import StealthBrowser, SessionManager, ExportUtils, JobSearch
 
 async def exemple_recherche_emplois():
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         search = JobSearch(browser.page)
         results = await search.search_and_scrape(
@@ -112,10 +110,10 @@ async def exemple_recherche_emplois():
 ### Example 3 — Scrape a single company
 
 ```python
-from linkedin.scrapers.company_scraper import CompanyScraper
+from linkedin import StealthBrowser, SessionManager, ExportUtils, CompanyScraper
 
 async def exemple_scrape_entreprise(company_url):
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         scraper = CompanyScraper(browser.page)
         result = await scraper.scrape(company_url)
@@ -125,10 +123,10 @@ async def exemple_scrape_entreprise(company_url):
 ### Example 4 — Scrape employees
 
 ```python
-from linkedin.scrapers.people_scraper import PeopleScraper
+from linkedin import StealthBrowser, SessionManager, ExportUtils, PeopleScraper
 
 async def exemple_employes(company_url):
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         scraper = PeopleScraper(browser.page)
         results = await scraper.scrape_company_people(
@@ -142,10 +140,10 @@ async def exemple_employes(company_url):
 ### Example 5 — Scrape company posts
 
 ```python
-from linkedin.scrapers.posts_scraper import PostsScraper
+from linkedin import StealthBrowser, SessionManager, ExportUtils, PostsScraper
 
 async def exemple_posts(company_url):
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         scraper = PostsScraper(browser.page)
         results = await scraper.scrape(company_url=company_url, limit=10)
@@ -155,10 +153,10 @@ async def exemple_posts(company_url):
 ### Example 6 — Send a message
 
 ```python
-from linkedin.actions.messenger import LinkedInMessenger
+from linkedin import StealthBrowser, SessionManager, LinkedInMessenger
 
 async def exemple_message(profile_url, message):
-    async with BrowserManager(headless=False) as browser:
+    async with StealthBrowser(headless=False) as browser:
         await SessionManager.load(browser)
         messenger = LinkedInMessenger(browser.page)
         success = await messenger.send_message(

@@ -12,6 +12,7 @@ from linkedin.utils.filters import (
 )
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
+from linkedin.utils.stealth_browser import StealthBrowser
 
 __all__ = [
     "GEO_IDS",
@@ -26,4 +27,5 @@ __all__ = [
     "resolve_multi",
     "SessionManager",
     "ExportUtils",
+    "StealthBrowser",
 ]

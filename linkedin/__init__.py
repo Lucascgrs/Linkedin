@@ -5,7 +5,7 @@ Modules:
     scrapers  — CompanyScraper, JobScraper, PeopleScraper, PostsScraper
     search    — CompanySearch, JobSearch
     actions   — LinkedInMessenger
-    utils     — SessionManager, ExportUtils, filters
+    utils     — StealthBrowser, SessionManager, ExportUtils, filters
 """
 from linkedin.scrapers.company_scraper import CompanyScraper
 from linkedin.scrapers.job_scraper import JobScraper
@@ -14,6 +14,7 @@ from linkedin.scrapers.posts_scraper import PostsScraper
 from linkedin.search.company_search import CompanySearch
 from linkedin.search.job_search import JobSearch
 from linkedin.actions.messenger import LinkedInMessenger
+from linkedin.utils.stealth_browser import StealthBrowser
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
 
@@ -25,6 +26,7 @@ __all__ = [
     "CompanySearch",
     "JobSearch",
     "LinkedInMessenger",
+    "StealthBrowser",
     "SessionManager",
     "ExportUtils",
 ]
