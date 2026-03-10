@@ -26,6 +26,11 @@ class JobScraper:
             job_description.
         """
         await self.page.goto(job_url, wait_until="domcontentloaded")
+        # Wait for the job title to appear so React-rendered content is ready
+        try:
+            await self.page.wait_for_selector("h1", timeout=10000)
+        except Exception:
+            pass
         await asyncio.sleep(random.uniform(2, 3))
 
         result = {
@@ -65,11 +70,19 @@ class JobScraper:
         try:
             company_links = await self.page.locator('a[href*="/company/"]').all()
             for link in company_links:
+                href = await link.get_attribute("href") or ""
+                # Skip sub-pages like /life, /jobs, /about — we want the main profile
+                href_path = href.split("?")[0]
+                segments = [s for s in href_path.split("/") if s]
+                company_idx = next(
+                    (i for i, s in enumerate(segments) if s == "company"), None
+                )
+                if company_idx is not None and len(segments) > company_idx + 2:
+                    continue
                 text = (await link.inner_text()).strip()
                 if text and len(text) > 1:
                     result["company"] = text
-                    href = await link.get_attribute("href") or ""
-                    clean = href.split("?")[0]
+                    clean = href_path
                     if not clean.startswith("http"):
                         clean = "https://www.linkedin.com" + clean
                     result["company_linkedin_url"] = clean
@@ -80,8 +93,10 @@ class JobScraper:
         # --- Location / workplace type / posted date / applicant count ---
         try:
             info_spans = await self.page.locator(
+                ".job-details-jobs-unified-top-card__primary-description-without-tagline span, "
                 ".job-details-jobs-unified-top-card__primary-description-container span, "
                 ".jobs-unified-top-card__subtitle-primary-grouping span, "
+                ".jobs-unified-top-card__primary-description span, "
                 "h1 ~ div span, h1 ~ p span"
             ).all()
             info_texts = []
@@ -114,8 +129,10 @@ class JobScraper:
         # --- Job type + seniority / experience level from "Job details" section ---
         try:
             detail_items = await self.page.locator(
-                ".jobs-unified-top-card__job-insight li, "
+                ".job-details-jobs-unified-top-card__job-insight span, "
+                ".jobs-unified-top-card__job-insight span, "
                 ".job-details-jobs-unified-top-card__job-insight li, "
+                ".jobs-unified-top-card__job-insight li, "
                 ".jobs-details__details li"
             ).all()
 
@@ -155,6 +172,7 @@ class JobScraper:
                 ".jobs-description__content",
                 ".jobs-description",
                 "#job-details",
+                "#job-details article",
                 "article",
             ]
             for sel in desc_selectors:
