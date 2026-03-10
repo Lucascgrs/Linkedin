@@ -13,7 +13,7 @@ Setup:
 """
 import asyncio
 
-from linkedin_scraper import BrowserManager
+from stealth_browser import StealthBrowser as BrowserManager
 
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
