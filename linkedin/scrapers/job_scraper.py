@@ -2,7 +2,7 @@
 JobScraper — scrapes a LinkedIn job offer detail page.
 """
 import asyncio
-import urllib.parse
+import random
 
 
 class JobScraper:
@@ -45,7 +45,8 @@ class JobScraper:
             seniority_level, employment_type, job_function, industries.
         """
         await self.page.goto(linkedin_url, wait_until="domcontentloaded")
-        await asyncio.sleep(3)
+        # Délai aléatoire pour simuler un comportement humain
+        await asyncio.sleep(random.uniform(2.5, 5.0))
 
         result = {
             "linkedin_url":     linkedin_url,
@@ -62,9 +63,17 @@ class JobScraper:
             "industries":       None,
         }
 
+        # Attend que le titre soit visible avant de continuer
+        try:
+            await self.page.locator("h1.topcard__title").wait_for(
+                state="visible", timeout=10000
+            )
+        except Exception:
+            print("  ⚠️ Titre non trouvé dans les 10s, on continue quand même...")
+
         # --- Title ---
         try:
-            title_el = self.page.locator("h1.topcard__title, h1.top-card-layout__title").first
+            title_el = self.page.locator("h1.topcard__title").first
             if await title_el.count() > 0:
                 result["title"] = (await title_el.inner_text()).strip()
         except Exception:
@@ -76,7 +85,6 @@ class JobScraper:
             if await company_link.count() > 0:
                 result["company_name"] = (await company_link.inner_text()).strip()
                 href = await company_link.get_attribute("href") or ""
-                # Strip tracking query parameters
                 result["company_url"] = href.split("?")[0]
         except Exception:
             pass
@@ -86,8 +94,6 @@ class JobScraper:
             flavors = await self.page.locator(".topcard__flavor--bullet").all()
             for flavor in flavors:
                 text = (await flavor.inner_text()).strip()
-                # Skip applicant-count strings like "157 applicants"
-                # (those are handled separately below)
                 if text and "applicant" not in text.lower():
                     result["location"] = text
                     break
@@ -112,17 +118,15 @@ class JobScraper:
 
         # --- Job description ---
         try:
-            # Expand the "Show more" button if present
             show_more = self.page.locator(
                 "button.show-more-less-html__button--more"
             ).first
             if await show_more.count() > 0:
                 await show_more.click()
-                await asyncio.sleep(1)
+                await asyncio.sleep(random.uniform(0.8, 1.5))
 
             desc_el = self.page.locator(
-                ".description__text .show-more-less-html__markup, "
-                ".description__text--rich"
+                ".show-more-less-html__markup, .description__text--rich"
             ).first
             if await desc_el.count() > 0:
                 result["description"] = (await desc_el.inner_text()).strip()
@@ -134,22 +138,18 @@ class JobScraper:
             items = await self.page.locator(".description__job-criteria-item").all()
             for item in items:
                 header_el = item.locator(".description__job-criteria-subheader").first
-                value_el = item.locator(".description__job-criteria-text").first
+                value_el  = item.locator(".description__job-criteria-text").first
 
                 if await header_el.count() == 0 or await value_el.count() == 0:
                     continue
 
                 header = (await header_el.inner_text()).strip().lower()
-                value = (await value_el.inner_text()).strip()
+                value  = (await value_el.inner_text()).strip()
 
-                field = None
                 for key, mapped in self.CRITERIA_MAP.items():
                     if key in header:
-                        field = mapped
+                        result[mapped] = value
                         break
-
-                if field:
-                    result[field] = value
 
         except Exception as e:
             print(f"  ⚠️ Erreur extraction critères : {e}")
