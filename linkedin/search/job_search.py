@@ -164,7 +164,7 @@ class JobSearch:
             mode_travail, type_contrat, niveau_experience,
             max_offres,
         )
-        scraper = JobScraper(self.page)
+        scraper = JobScraper(self.page, self.page.context)
         results = []
         for i, url in enumerate(urls, 1):
             print(f"  [{i:2d}/{len(urls)}] {url}")

@@ -1,7 +1,9 @@
 """
 SessionManager — creates and loads LinkedIn Playwright sessions.
+Note : le chargement de session est maintenant géré directement par StealthBrowser
+via storage_state dans new_context (cookies + localStorage).
 """
-from linkedin_scraper import BrowserManager, wait_for_manual_login
+import os
 
 
 class SessionManager:
@@ -13,33 +15,38 @@ class SessionManager:
     async def create_session(output_path: str = SESSION_FILE) -> None:
         """
         Open a browser, wait for manual login, then save the session.
-
-        Args:
-            output_path: Path where the session JSON will be saved.
+        Lance plutôt Sessions.py directement pour créer une session.
         """
-        print("=" * 50)
-        print("  Création de la session LinkedIn")
-        print("=" * 50)
-        print("\n1. Un navigateur va s'ouvrir")
-        print("2. Connecte-toi manuellement à LinkedIn")
-        print("3. La session sera sauvegardée automatiquement\n")
-
-        async with BrowserManager(headless=False) as browser:
-            await browser.page.goto("https://www.linkedin.com/login")
-            print("⏳ En attente de ta connexion (5 minutes max)...")
-            await wait_for_manual_login(browser.page, timeout=300_000)
-            await browser.save_session(output_path)
-            print(f"\n✅ Session sauvegardée dans {output_path}")
-            print("⚠️  Ne commite JAMAIS ce fichier sur Git !")
+        import importlib, sys
+        # Sessions.py est à la racine du projet Linkedin
+        import os as _os
+        root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        sessions_mod = importlib.import_module("Sessions")
+        await sessions_mod.create_session()
 
     @staticmethod
-    async def load(browser: BrowserManager, session_path: str = SESSION_FILE) -> None:
+    async def load(browser, session_path: str = SESSION_FILE) -> None:
         """
-        Load a previously saved session into the given browser instance.
+        Vérifie que la session a bien été chargée par StealthBrowser.
+        Le chargement réel se fait dans StealthBrowser.__aenter__ via storage_state.
 
         Args:
-            browser:      An active BrowserManager context.
-            session_path: Path to the session JSON file.
+            browser:      An active StealthBrowser context.
+            session_path: Path to the session JSON file (for logging only).
         """
-        await browser.load_session(session_path)
-        print(f"✓ Session chargée depuis {session_path}")
+        if not os.path.exists(session_path):
+            raise FileNotFoundError(
+                f"Session introuvable : {session_path}\n"
+                f"Lance d'abord : python Sessions.py"
+            )
+        # La session est déjà chargée par StealthBrowser via storage_state.
+        # On navigue vers le feed pour vérifier que la session est active.
+        await browser.page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
+        current_url = browser.page.url
+        if "/login" in current_url or "/checkpoint" in current_url:
+            raise RuntimeError(
+                "Session expirée ou invalide. Relance : python Sessions.py"
+            )
+        print(f"✓ Session LinkedIn active ({session_path})")

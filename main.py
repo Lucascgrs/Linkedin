@@ -60,7 +60,7 @@ async def exemple_recherche_emplois():
             date_publiee="mois",
             mode_travail=[],
             type_contrat=["cdi"],
-            max_offres=5,
+            max_offres=1,
         )
         ExportUtils.to_json_and_excel(results, "output/jobs", "Offres")
 
@@ -139,7 +139,7 @@ async def exemple_scrape_offre(job_url: str):
     """
     async with BrowserManager(headless=False) as browser:
         await SessionManager.load(browser)
-        scraper = JobScraper(browser.page)
+        scraper = JobScraper(browser.page, browser.context)
         result = await scraper.scrape(job_url)
         ExportUtils.to_json_and_excel([result], "output/job", "Offre")
 
@@ -211,9 +211,7 @@ if __name__ == "__main__":
     # ))
 
     # --- Example 4: Scrape employees ---
-    # asyncio.run(exemple_employes(
-    #     "https://www.linkedin.com/company/COMPANY_SLUG/"
-    # ))
+    #asyncio.run(exemple_employes("https://www.linkedin.com/company/COMPANY_SLUG/"))
 
     # --- Example 5: Scrape posts ---
     # asyncio.run(exemple_posts(
