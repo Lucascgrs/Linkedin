@@ -57,8 +57,8 @@ async def exemple_recherche_emplois():
         results = await search.search_and_scrape(
             keywords="data analyst",
             pays="france",
-            date_publiee="semaine",
-            mode_travail=["hybride", "remote"],
+            date_publiee="mois",
+            mode_travail=[],
             type_contrat=["cdi"],
             max_offres=5,
         )
@@ -200,10 +200,10 @@ async def exemple_messages_bulk(contacts: list[dict]):
 
 if __name__ == "__main__":
     # --- Example 1: Search companies ---
-    asyncio.run(exemple_recherche_entreprises())
+    #asyncio.run(exemple_recherche_entreprises())
 
     # --- Example 2: Search jobs ---
-    # asyncio.run(exemple_recherche_emplois())
+    asyncio.run(exemple_recherche_emplois())
 
     # --- Example 3: Scrape a single company ---
     # asyncio.run(exemple_scrape_entreprise(
