@@ -9,7 +9,6 @@ Stratégie (par ordre de priorité) :
 """
 import asyncio
 import json
-import random
 import re
 
 
@@ -133,35 +132,66 @@ class JobScraper:
             # domcontentloaded uniquement — networkidle bloque sur LinkedIn (polling permanent)
             await self.page.goto(linkedin_url, wait_until="domcontentloaded", timeout=30000)
 
-            # Attendre qu'Ember rende le contenu : essayer plusieurs ancres dans l'ordre
+            # Vérifier si LinkedIn affiche un mur de connexion / modal
+            await asyncio.sleep(1)
+            try:
+                dismiss_btns = [
+                    "button.modal__dismiss",
+                    "button[aria-label='Ignorer']",
+                    "button[aria-label='Dismiss']",
+                ]
+                for btn_sel in dismiss_btns:
+                    btn = self.page.locator(btn_sel).first
+                    if await btn.count() > 0:
+                        await btn.click()
+                        await asyncio.sleep(0.5)
+                        break
+            except Exception:
+                pass
+
+            # Attendre que le contenu soit rendu — ancres stables de la nouvelle UI SDUI
             for anchor_sel in [
-                "h1",
-                ".jobs-unified-top-card",
-                ".job-details-jobs-unified-top-card",
+                # Nouvelle UI SDUI 2025 (éléments confirmés dans le HTML)
+                "[data-sdui-screen]",
+                "[data-testid='lazy-column']",
+                "[data-sdui-component*='aboutTheJob']",
+                "[data-testid='expandable-text-box']",
+                # UI intermédiaire
+                ".job-details-jobs-unified-top-card__job-title",
                 ".jobs-unified-top-card__job-title",
-                ".jobs-details__main-content",
+                # Ancienne UI
+                "h1.t-24",
+                "h1",
                 "[data-job-id]",
-                "section.core-rail",
-                ".job-view-layout",
             ]:
                 try:
-                    await self.page.wait_for_selector(anchor_sel, timeout=8000)
+                    await self.page.wait_for_selector(anchor_sel, timeout=6000)
                     break
                 except Exception:
                     continue
             else:
-                await asyncio.sleep(4)
+                await asyncio.sleep(5)
 
             # Attente supplémentaire pour le rendu dynamique (company, location, etc.)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
 
-            # Scroll pour déclencher le lazy-load des sections
+            # Scroll complet pour déclencher le lazy-load de toutes les sections
             await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(1.0)
             await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(1.0)
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(1.0)
             await self.page.evaluate("window.scrollTo(0, 0)")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.8)
+
+            # Avertissement si la page est anormalement courte (blocage anti-bot probable)
+            try:
+                html_len = len(await self.page.content())
+                if html_len < 5000:
+                    print(f"  ⚠️ Page trop courte ({html_len} chars) — possible blocage LinkedIn pour {linkedin_url}")
+            except Exception:
+                pass
 
             await self._extract_all(result)
 
@@ -183,128 +213,215 @@ class JobScraper:
         # --- Titre ---
         if not result["title"]:
             title = await _try_selectors(page, [
-                "h1.jobs-unified-top-card__job-title",
-                "h1.job-details-jobs-unified-top-card__job-title",
-                "h1.t-24.t-bold.inline",
-                "h1.t-24",
-                "h1[class*='job-title']",
                 "h1",
+                "h1[class*='job-title']",
+                "h1.t-24",
             ])
             if not title:
-                # Fallback balise <title>
                 title_tag = await page.title()
                 if title_tag:
-                    title = re.sub(r"\s*[|\-–].*LinkedIn.*$", "", title_tag).strip()
+                    # Format : "Data Analyst - Bordeaux, France (H/F) | Astek | LinkedIn"
+                    # → on prend tout avant le premier " | "
+                    title = re.split(r"\s*\|\s*", title_tag)[0].strip()
+                    # Nettoyer le suffixe " - Ville, Pays (H/F)"
+                    title = re.sub(r"\s+-\s+[^-]+$", "", title).strip()
+                    # Si toujours vide, prendre le raw nettoyé LinkedIn
+                    if not title:
+                        title = re.sub(r"\s*[|\-–].*LinkedIn.*$", "", title_tag).strip()
             if title:
                 result["title"] = title
+
+        # --- Titre (fallback SDUI : le <p> principal de l'offre) ---
+        if not result["title"]:
+            try:
+                all_p = await page.locator("main p, [role='main'] p").all()
+                for p_el in all_p[:30]:
+                    txt = (await p_el.inner_text()).strip()
+                    if txt and 5 < len(txt) < 120 and "LinkedIn" not in txt and "·" not in txt and "candidature" not in txt.lower():
+                        result["title"] = txt
+                        break
+            except Exception:
+                pass
+
+        # --- Location depuis le titre si pas encore trouvée ---
+        if not result["location"]:
+            try:
+                title_tag = await page.title()
+                # "Data Analyst - Bordeaux, France (H/F) | Astek | LinkedIn"
+                m = re.search(r"-\s*([^|(H/F)]+?)(?:\s*\(H/F\))?\s*\|", title_tag)
+                if m:
+                    loc = m.group(1).strip()
+                    if loc and len(loc) > 2:
+                        result["location"] = loc
+            except Exception:
+                pass
 
         # --- Entreprise (nom + URL) ---
         if not result["company_url"]:
             company_url = await _try_attr_selectors(page, [
-                ("a.jobs-unified-top-card__company-name", "href"),
-                ("div.job-details-jobs-unified-top-card__company-name a", "href"),
-                ("a.job-details-jobs-unified-top-card__company-name", "href"),
-                (".job-details-jobs-unified-top-card__company-name a", "href"),
-                ("a.topcard__org-name-link", "href"),
-                ("a[data-tracking-control-name*='company']", "href"),
-                (".topcard__flavor--black-link", "href"),
+                # Nouvelle UI : lien vers /company/ dans le top-card
+                ("a[href*='/company/'][aria-label*='Entreprise']", "href"),
+                ("a[href*='/company/'][aria-label*='Company']", "href"),
+                # Fallback : premier lien /company/ hors nav
+                ("main a[href*='/company/']", "href"),
                 ("a[href*='/company/']", "href"),
             ])
             if company_url:
                 result["company_url"] = company_url.split("?")[0]
 
         if not result["company_name"]:
+            # Nouvelle UI : l'entreprise est dans un <p> enfant du bloc avec aria-label="Entreprise, XXX"
+            try:
+                company_block = page.locator("[aria-label*='Entreprise'], [aria-label*='Company']").first
+                if await company_block.count() > 0:
+                    link = company_block.locator("a").first
+                    if await link.count() > 0:
+                        name = (await link.inner_text()).strip()
+                        if name:
+                            result["company_name"] = name
+            except Exception:
+                pass
+
+        if not result["company_name"]:
             company_name = await _try_selectors(page, [
-                "a.jobs-unified-top-card__company-name",
-                "div.job-details-jobs-unified-top-card__company-name a",
-                "a.job-details-jobs-unified-top-card__company-name",
-                ".job-details-jobs-unified-top-card__company-name a",
-                ".job-details-jobs-unified-top-card__company-name",
-                "a.topcard__org-name-link",
-                "a[data-tracking-control-name*='company']",
-                ".topcard__flavor--black-link",
-                "span.topcard__flavor a",
+                "main a[href*='/company/']",
+                "a[href*='/company/']",
             ])
             if company_name:
                 result["company_name"] = company_name.strip()
 
-        # --- Localisation ---
-        if not result["location"]:
-            location = await _try_selectors(page, [
-                "span.jobs-unified-top-card__bullet",
-                "span.job-details-jobs-unified-top-card__bullet",
-                ".job-details-jobs-unified-top-card__bullet",
-                "span.jobs-unified-top-card__workplace-type",
-                ".job-details-jobs-unified-top-card__workplace-type",
-                "span.topcard__flavor--bullet",
-                "span[class*='location']",
-                "span[class*='bullet']",
-                ".topcard__flavor:not(a)",
-            ])
-            if location:
-                result["location"] = location
+        # Fallback : extraire company_name depuis company_url
+        if not result["company_name"] and result["company_url"]:
+            m = re.search(r"/company/([^/?#]+)", result["company_url"])
+            if m:
+                result["company_name"] = m.group(1).replace("-", " ").title()
 
-        # --- Date de publication ---
-        if not result["posted_time"]:
-            posted = await _try_selectors(page, [
-                "span.jobs-unified-top-card__posted-date",
-                "span.job-details-jobs-unified-top-card__posted-date",
-                ".job-details-jobs-unified-top-card__posted-date",
-                "span.posted-time-ago__text",
-                "span[class*='posted-time']",
-                "span[class*='time-ago']",
-                "span[class*='posted']",
-                "time",
-            ])
-            if posted:
-                result["posted_time"] = posted
-
-        # --- Nombre de candidats ---
-        if not result["applicants_count"]:
-            applicants = await _try_selectors(page, [
-                "span.jobs-unified-top-card__applicant-count",
-                "span.job-details-jobs-unified-top-card__applicant-count",
-                ".job-details-jobs-unified-top-card__applicant-count",
-                "span.num-applicants__caption",
-                "span[class*='num-applicants']",
-                "span[class*='applicant']",
-                "figcaption[class*='applicant']",
-            ])
-            if applicants:
-                result["applicants_count"] = applicants
+        # --- Localisation / Date / Candidats depuis le <p> avec séparateurs "·" ---
+        # Nouvelle UI : un seul <p> contient "Bordeaux · Republié il y a X · Plus de 100 candidatures"
+        await self._extract_meta_paragraph(result)
 
         # --- Description ---
         if not result["description"]:
-            # Essayer d'abord de cliquer sur "Voir plus" pour déplier la description
+            # Cliquer sur "Voir plus" si disponible
             try:
                 see_more = page.locator(
-                    "button.show-more-less-html__button, "
-                    "button.jobs-description__footer-button, "
+                    "[data-testid='expandable-text-box'] button, "
+                    "button[aria-label*='Voir plus'], "
                     "button[aria-label*='more'], "
-                    "button[class*='show-more']"
+                    "button.show-more-less-html__button"
                 ).first
                 if await see_more.count() > 0:
                     await see_more.click()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.8)
             except Exception:
                 pass
 
             description = await _try_selectors(page, [
+                # Nouvelle UI SDUI : data-testid stable
+                "[data-testid='expandable-text-box']",
+                # data-sdui-component aboutTheJob
+                "[data-sdui-component*='aboutTheJob'] p",
+                # Ancienne UI
+                "#job-details",
+                "div#job-details",
                 "div.show-more-less-html__markup",
                 "div[class*='show-more-less-html__markup']",
-                "#job-details",
                 "div.jobs-description__content",
-                "div.jobs-box__html-content",
-                ".job-details-jobs-unified-top-card__job-insight",
                 "div.description__text",
-                "section.description div",
-                "div[class*='description']",
             ])
             if description:
                 result["description"] = description
 
         # --- Critères (séniorité, type contrat, fonction, secteur) ---
         await self._extract_criteria(result)
+
+        # --- Log diagnostic si des champs sont encore null ---
+        null_fields = [k for k, v in result.items() if v is None and k != "linkedin_url"]
+        if null_fields:
+            print(f"  ℹ️ Champs null après extraction : {null_fields}")
+
+    # ------------------------------------------------------------------
+    # Extraction localisation / date / candidats depuis le paragraphe meta
+    # ------------------------------------------------------------------
+
+    async def _extract_meta_paragraph(self, result: dict) -> None:
+        """
+        Nouvelle UI LinkedIn 2025 : localisation, date et candidats sont dans un seul <p>
+        au format : "Bordeaux, France · Republié il y a 4 min · Plus de 100 candidatures"
+        """
+        page = self.page
+        try:
+            # Chercher le <p> contenant un séparateur "·" dans la zone principale
+            all_p = await page.locator("main p, [role='main'] p").all()
+            for p_el in all_p[:60]:
+                try:
+                    txt = (await p_el.inner_text()).strip()
+                    if "·" not in txt:
+                        continue
+                    parts = [p.strip() for p in txt.split("·")]
+                    if len(parts) < 2:
+                        continue
+
+                    # Heuristiques pour identifier le bon <p>
+                    has_location = any(
+                        kw in parts[0].lower()
+                        for kw in ["france", "paris", "lyon", "bordeaux", "marseille",
+                                   "toulouse", "nantes", "lille", "remote", "télétravail",
+                                   "region", "département", "belgique", "suisse", "luxembourg"]
+                    ) or (len(parts[0]) > 3 and len(parts[0]) < 80)
+
+                    has_time = any(
+                        kw in txt.lower()
+                        for kw in ["il y a", "ago", "repost", "republié", "publié", "posted",
+                                   "hour", "day", "week", "heure", "jour", "semaine", "minute"]
+                    )
+
+                    if not (has_location or has_time):
+                        continue
+
+                    # Localisation : premier segment (avant le premier ·)
+                    if not result["location"] and parts[0]:
+                        result["location"] = parts[0]
+
+                    # Date et candidats dans les segments suivants
+                    for part in parts[1:]:
+                        part_lower = part.lower()
+                        if not result["posted_time"] and any(
+                            kw in part_lower for kw in ["il y a", "ago", "republié", "publié",
+                                                         "posted", "heure", "jour", "semaine",
+                                                         "minute", "repost"]
+                        ):
+                            # Nettoyer les balises potentielles
+                            result["posted_time"] = re.sub(r"\s+", " ", part).strip()
+
+                        elif not result["applicants_count"] and any(
+                            kw in part_lower for kw in ["candidat", "applicant", "postul",
+                                                          "postuler", "candidature"]
+                        ):
+                            result["applicants_count"] = re.sub(r"\s+", " ", part).strip()
+
+                    # Si on a trouvé au moins la localisation, on arrête
+                    if result["location"]:
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Fallback CSS pour chaque champ encore null
+        if not result["location"]:
+            result["location"] = await _try_selectors(page, [
+                "span[class*='bullet']",
+                "span[class*='location']",
+                "span.topcard__flavor--bullet",
+            ])
+
+        if not result["posted_time"]:
+            result["posted_time"] = await _try_selectors(page, [
+                "span[class*='posted']",
+                "span[class*='time-ago']",
+                "time",
+            ])
 
     # ------------------------------------------------------------------
     # Extraction depuis JSON-LD (stratégie principale)
@@ -383,7 +500,36 @@ class JobScraper:
     async def _extract_criteria(self, result: dict) -> None:
         page = self.page
 
+        # ------------------------------------------------------------------
+        # Stratégie 0 : Nouvelle UI SDUI 2025 — pills <a> dans le top-card
+        # Dans le HTML on voit des <a href="/jobs/view/ID/"> contenant le texte
+        # "Hybride", "Temps plein", "CDI", etc. directement cliquables.
+        # ------------------------------------------------------------------
+        try:
+            # Tous les liens internes vers la même offre (pills de tags)
+            pill_links = await page.locator(
+                "main a[href*='/jobs/view/']"
+            ).all()
+            for link in pill_links:
+                try:
+                    txt = (await link.inner_text()).strip()
+                    if not txt or len(txt) > 40:
+                        continue
+                    txt_lower = txt.lower()
+                    if any(k in txt_lower for k in self._EMPLOYMENT_KEYWORDS):
+                        if not result["employment_type"]:
+                            result["employment_type"] = txt
+                    elif any(k in txt_lower for k in self._SENIORITY_KEYWORDS):
+                        if not result["seniority_level"]:
+                            result["seniority_level"] = txt
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # ------------------------------------------------------------------
         # Stratégie A : liste <li> avec header h3 + span valeur (ancienne UI)
+        # ------------------------------------------------------------------
         criteria_items = page.locator(
             "li.description__job-criteria-item, "
             "li[class*='job-criteria-item']"
@@ -393,26 +539,14 @@ class JobScraper:
             for i in range(count):
                 item = criteria_items.nth(i)
                 try:
-                    header_el = item.locator(
-                        "h3.description__job-criteria-subheader, "
-                        "h3[class*='job-criteria-subheader'], "
-                        "span[class*='criteria-label'], "
-                        "h3, dt"
-                    ).first
-                    value_el = item.locator(
-                        "span.description__job-criteria-text, "
-                        "span[class*='job-criteria-text'], "
-                        "span[class*='criteria-value'], "
-                        "span:not(h3 span), dd"
-                    ).first
-
+                    header_el = item.locator("h3, dt").first
+                    value_el = item.locator("span:not(h3 span), dd").first
                     header_text = ""
                     value_text = ""
                     if await header_el.count() > 0:
                         header_text = (await header_el.inner_text()).strip().lower()
                     if await value_el.count() > 0:
                         value_text = (await value_el.inner_text()).strip()
-
                     if header_text and value_text:
                         for key, field in self.CRITERIA_MAP.items():
                             if key in header_text:
@@ -422,7 +556,9 @@ class JobScraper:
                     continue
             return
 
-        # Stratégie B : pills sans étiquettes (nouvelle UI LinkedIn)
+        # ------------------------------------------------------------------
+        # Stratégie B : pills nommées (ancienne nouvelle UI)
+        # ------------------------------------------------------------------
         pill_items = page.locator(
             "li.job-details-preferences-and-skills__pill, "
             "span.job-details-preferences-and-skills__pill, "
@@ -444,28 +580,9 @@ class JobScraper:
                 except Exception:
                     continue
 
-        # Stratégie C : sections "insight" unifiées (nouvelle UI LinkedIn)
-        insight_items = page.locator(
-            "li.job-details-jobs-unified-top-card__job-insight, "
-            "li[class*='job-insight'], "
-            "span[class*='job-insight']"
-        )
-        count2 = await insight_items.count()
-        if count2 > 0:
-            for i in range(count2):
-                item = insight_items.nth(i)
-                try:
-                    text = (await item.inner_text()).strip().lower()
-                    if any(k in text for k in self._EMPLOYMENT_KEYWORDS):
-                        if not result["employment_type"]:
-                            result["employment_type"] = (await item.inner_text()).strip()
-                    if any(k in text for k in self._SENIORITY_KEYWORDS):
-                        if not result["seniority_level"]:
-                            result["seniority_level"] = (await item.inner_text()).strip()
-                except Exception:
-                    continue
-
-        # Stratégie D : extraire depuis le HTML brut de la page
+        # ------------------------------------------------------------------
+        # Stratégie C : fallback HTML brut
+        # ------------------------------------------------------------------
         try:
             html = await page.content()
             await self._extract_criteria_from_html(html, result)
@@ -477,15 +594,46 @@ class JobScraper:
     # ------------------------------------------------------------------
 
     async def _extract_criteria_from_html(self, html: str, result: dict) -> None:
-        # Nouvelle UI : data-test-id ou attributs aria
+        """Extraction des champs restants par regex sur le HTML brut."""
+
+        # ------------------------------------------------------------------
+        # Employment type & seniority : chercher les textes visibles dans des
+        # balises courtes (spans, a, strong) qui matchent les keywords connus
+        # ------------------------------------------------------------------
+        all_employment = [
+            "full-time", "part-time", "contract", "temporary", "volunteer",
+            "internship", "cdi", "cdd", "stage", "alternance", "intérim",
+            "temps plein", "temps partiel", "freelance", "hybride",
+            "présentiel", "télétravail", "remote",
+        ]
+        all_seniority = [
+            "entry level", "associate", "junior", "mid-senior", "senior",
+            "director", "executive", "débutant", "confirmé",
+            "manager", "directeur",
+        ]
+
+        # Regex : texte court dans une balise inline
+        inline_texts = re.findall(
+            r'<(?:span|a|strong|p)[^>]{0,200}>\s*([^<]{2,40})\s*</(?:span|a|strong|p)>',
+            html, re.IGNORECASE
+        )
+        for txt in inline_texts:
+            txt_clean = txt.strip()
+            txt_lower = txt_clean.lower()
+            if not result["employment_type"] and any(k == txt_lower for k in all_employment):
+                result["employment_type"] = txt_clean
+            if not result["seniority_level"] and any(k == txt_lower for k in all_seniority):
+                result["seniority_level"] = txt_clean
+
+        # ------------------------------------------------------------------
+        # Patterns ancienne UI avec label explicite
+        # ------------------------------------------------------------------
         patterns_criteria = [
-            # Format "label : valeur" dans le HTML
             (r'<span[^>]*>\s*(Niveau d[^<]*|Seniority[^<]*)\s*</span>\s*<span[^>]*>\s*([^<]+)\s*</span>', "seniority_level"),
             (r'<span[^>]*>\s*(Type d.emploi|Employment type[^<]*)\s*</span>\s*<span[^>]*>\s*([^<]+)\s*</span>', "employment_type"),
             (r'<span[^>]*>\s*(Fonction|Job function[^<]*)\s*</span>\s*<span[^>]*>\s*([^<]+)\s*</span>', "job_function"),
             (r'<span[^>]*>\s*(Secteur[^<]*|Industri[^<]*)\s*</span>\s*<span[^>]*>\s*([^<]+)\s*</span>', "industries"),
         ]
-
         for pattern, field in patterns_criteria:
             if result[field]:
                 continue
@@ -493,40 +641,26 @@ class JobScraper:
             if m:
                 result[field] = _strip_tags(m.group(2))
 
-        # Entreprise fallback via regex HTML
-        if not result["company_name"]:
-            m = re.search(
-                r'<a[^>]*(?:topcard__org-name-link|company)[^>]*href="([^"?]+)[^"]*"[^>]*>(.*?)</a>',
-                html, re.DOTALL | re.IGNORECASE
-            )
-            if m:
-                result["company_url"] = m.group(1).split("?")[0]
-                result["company_name"] = _strip_tags(m.group(2))
-
+        # ------------------------------------------------------------------
         # Localisation fallback
+        # ------------------------------------------------------------------
         if not result["location"]:
-            m = re.search(
-                r'<span[^>]*topcard__flavor--bullet[^>]*>(.*?)</span>',
-                html, re.DOTALL
-            )
+            # Chercher dans le title : "Intitulé - Ville, Pays | Entreprise | LinkedIn"
+            m = re.search(r'<title>[^<]+-\s*([^|<(]+?)(?:\s*\(H/F\))?\s*\|', html)
             if m:
-                result["location"] = _strip_tags(m.group(1))
+                loc = m.group(1).strip()
+                if loc and "LinkedIn" not in loc:
+                    result["location"] = loc
 
         # Posted time fallback
         if not result["posted_time"]:
-            m = re.search(
-                r'<span[^>]*posted-time-ago__text[^>]*>(.*?)</span>',
-                html, re.DOTALL
-            )
+            m = re.search(r'<span[^>]*posted-time-ago__text[^>]*>(.*?)</span>', html, re.DOTALL)
             if m:
                 result["posted_time"] = _strip_tags(m.group(1))
 
         # Applicants fallback
         if not result["applicants_count"]:
-            m = re.search(
-                r'<span[^>]*num-applicants__caption[^>]*>(.*?)</span>',
-                html, re.DOTALL
-            )
+            m = re.search(r'<span[^>]*num-applicants__caption[^>]*>(.*?)</span>', html, re.DOTALL)
             if m:
                 result["applicants_count"] = _strip_tags(m.group(1))
 

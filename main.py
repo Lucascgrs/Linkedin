@@ -195,6 +195,37 @@ async def exemple_messages_bulk(contacts: list[dict]):
 
 
 # ============================================================
+# Exemple 9 (DIAGNOSTIC) : Sauvegarder le HTML d'une offre
+# ============================================================
+
+async def diagnostic_html_offre(job_url: str):
+    """Sauvegarde le HTML brut d'une offre pour inspecter les vraies classes CSS LinkedIn.
+
+    Usage :
+        1. Lancer cette fonction avec l'URL d'une offre
+        2. Ouvrir output/debug_job.html dans un navigateur ou éditeur
+        3. Chercher les classes CSS autour du titre, de l'entreprise, etc.
+
+    Args:
+        job_url: URL LinkedIn de l'offre, ex. "https://www.linkedin.com/jobs/view/1234567890/"
+    """
+    import os
+    async with BrowserManager(headless=False) as browser:
+        await SessionManager.load(browser)
+        page = browser.page
+        await page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
+        import asyncio as _a
+        await _a.sleep(5)
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await _a.sleep(2)
+        html = await page.content()
+        os.makedirs("output", exist_ok=True)
+        with open("output/debug_job.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"✅ HTML sauvegardé dans output/debug_job.html ({len(html)} chars)")
+
+
+# ============================================================
 # Entry point — uncomment the example you want to run
 # ============================================================
 
@@ -221,6 +252,11 @@ if __name__ == "__main__":
     # --- Example 6: Scrape a single job offer ---
     # asyncio.run(exemple_scrape_offre(
     #     "https://www.linkedin.com/jobs/view/JOB_ID/"
+    # ))
+
+    # --- Example 9: DIAGNOSTIC — Sauvegarder le HTML d'une offre pour inspecter les classes CSS ---
+    # asyncio.run(diagnostic_html_offre(
+    #     "https://www.linkedin.com/jobs/view/4379667856"
     # ))
 
     # --- Example 7: Send a message ---
