@@ -39,6 +39,8 @@ class JobScraper:
                 ".job-details-jobs-unified-top-card__job-title, "
                 ".jobs-unified-top-card__job-title, "
                 ".jobs-details-top-card__job-title, "
+                "h1.top-card-layout__title, "
+                "h1.topcard__title, "
                 "h1.t-24, "
                 "h1",
                 timeout=15000,
@@ -64,6 +66,7 @@ class JobScraper:
 
         # --- Job title ---
         # Try targeted selectors first, then progressively broader ones.
+        # Includes both logged-in interface classes and public/guest page classes.
         _TITLE_SELECTORS = [
             ".job-details-jobs-unified-top-card__job-title h1",
             ".job-details-jobs-unified-top-card__job-title a",
@@ -72,6 +75,9 @@ class JobScraper:
             ".jobs-unified-top-card__job-title h1",
             ".jobs-unified-top-card__job-title",
             ".jobs-details-top-card__job-title",
+            # Public/guest page selectors
+            "h1.top-card-layout__title",
+            "h1.topcard__title",
             "h1.t-24",
             "h2.t-24",
             ".t-24.t-bold",
@@ -120,6 +126,8 @@ class JobScraper:
             ".job-details-jobs-unified-top-card__primary-description-without-tagline a[href*='/company/']",
             ".artdeco-entity-lockup__title a[href*='/company/']",
             ".artdeco-entity-lockup__title",
+            # Public/guest page selector
+            ".topcard__org-name-link",
         ]
         for sel in company_name_selectors:
             try:
@@ -178,6 +186,40 @@ class JobScraper:
                 pass
 
         # --- Location / workplace type / posted date / applicant count ---
+
+        # Public/guest page: direct selectors for date and applicant count
+        try:
+            posted = self.page.locator(".posted-time-ago__text")
+            if await posted.count() > 0:
+                t = (await posted.first.inner_text()).strip()
+                if t:
+                    result["posted_date"] = t
+        except Exception:
+            pass
+
+        try:
+            applicants = self.page.locator(".num-applicants__caption")
+            if await applicants.count() > 0:
+                t = (await applicants.first.inner_text()).strip()
+                if t:
+                    result["applicant_count"] = t
+        except Exception:
+            pass
+
+        # Public/guest page: location is in .topcard__flavor--bullet (but not --metadata)
+        if result["location"] is None:
+            try:
+                loc_spans = await self.page.locator(".topcard__flavor--bullet").all()
+                for span in loc_spans:
+                    classes = (await span.get_attribute("class")) or ""
+                    if "topcard__flavor--metadata" not in classes:
+                        t = (await span.inner_text()).strip()
+                        if t and len(t) > 1:
+                            result["location"] = t
+                            break
+            except Exception:
+                pass
+
         try:
             info_spans = await self.page.locator(
                 ".job-details-jobs-unified-top-card__primary-description-without-tagline span, "
@@ -204,13 +246,15 @@ class JobScraper:
                               "télétravail", "en présentiel", "full remote"]
                 ):
                     result["workplace_type"] = t
-                elif any(
+                elif result["posted_date"] is None and any(
                     w in tl
                     for w in ["il y a", "ago", "heure", "jour", "semaine", "mois",
                               "hour", "day", "week", "month", "minute"]
                 ):
                     result["posted_date"] = t
-                elif any(w in tl for w in ["candidat", "applicant", "postulant", "candidature"]):
+                elif result["applicant_count"] is None and any(
+                    w in tl for w in ["candidat", "applicant", "postulant", "candidature"]
+                ):
                     result["applicant_count"] = t
                 elif result["location"] is None and (
                     "," in t or any(c.isupper() for c in t[1:])
@@ -220,6 +264,29 @@ class JobScraper:
             pass
 
         # --- Job type + seniority / experience level from "Job details" section ---
+
+        # Public/guest page: structured criteria list with labelled items
+        try:
+            criteria_items = await self.page.locator(".description__job-criteria-item").all()
+            for item in criteria_items:
+                try:
+                    header_el = item.locator(".description__job-criteria-subheader").first
+                    value_el = item.locator(".description__job-criteria-text").first
+                    if await header_el.count() > 0 and await value_el.count() > 0:
+                        header = (await header_el.inner_text()).strip().lower()
+                        value = (await value_el.inner_text()).strip()
+                        if "seniority" in header or "niveau" in header or "ancienneté" in header:
+                            if result["seniority_level"] is None:
+                                result["seniority_level"] = value
+                            if result["experience_level"] is None:
+                                result["experience_level"] = value
+                        elif "employment" in header or "type de contrat" in header or "type d'emploi" in header:
+                            result["job_type"] = value
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         try:
             detail_items = await self.page.locator(
                 ".job-details-jobs-unified-top-card__job-insight span, "
@@ -236,7 +303,7 @@ class JobScraper:
                 tl = text.lower()
 
                 # Job type
-                if any(
+                if result["job_type"] is None and any(
                     w in tl
                     for w in ["temps plein", "full-time", "temps partiel", "part-time",
                               "contrat", "stage", "intérim", "bénévole", "freelance",
@@ -245,7 +312,7 @@ class JobScraper:
                     result["job_type"] = text
 
                 # Experience / seniority
-                if any(
+                if result["experience_level"] is None and any(
                     w in tl
                     for w in ["junior", "senior", "débutant", "confirmé", "manager",
                               "directeur", "entry", "associate", "mid-senior",
@@ -254,7 +321,7 @@ class JobScraper:
                     result["experience_level"] = text
 
                 # Seniority level (LinkedIn often has a separate field)
-                if any(
+                if result["seniority_level"] is None and any(
                     w in tl
                     for w in ["seniority", "niveau", "ancienneté"]
                 ):
@@ -271,6 +338,9 @@ class JobScraper:
                 "#job-details",
                 "#job-details article",
                 ".jobs-box__html-content",
+                # Public/guest page selectors
+                ".show-more-less-html__markup",
+                ".description__text",
                 "article",
             ]
             for sel in desc_selectors:
