@@ -1,12 +1,14 @@
 """
 JobScraper — scrapes a LinkedIn job offer detail page via Playwright.
 
-Stratégie :
-  - Playwright navigue directement vers la page de l'offre (session authentifiée).
-  - On extrait les données depuis le DOM rendu avec des sélecteurs CSS robustes
-    et de multiples fallbacks (identique à la stratégie qui fonctionne pour les titres).
+Stratégie (par ordre de priorité) :
+  1. JSON-LD  : <script type="application/ld+json"> contient souvent toutes les
+                données structurées (JobPosting) — méthode la plus fiable.
+  2. CSS selectors : multiples sélecteurs couvrant l'ancienne et la nouvelle UI.
+  3. Regex HTML    : fallback sur le contenu brut de la page.
 """
 import asyncio
+import json
 import random
 import re
 
@@ -80,6 +82,18 @@ class JobScraper:
         "secteur":             "industries",
     }
 
+    # Keywords used to classify pill-based criteria (nouvelle UI sans étiquettes)
+    _EMPLOYMENT_KEYWORDS = {
+        "full-time", "part-time", "contract", "temporary", "volunteer",
+        "internship", "cdi", "cdd", "stage", "alternance", "interim",
+        "temps plein", "temps partiel", "freelance",
+    }
+    _SENIORITY_KEYWORDS = {
+        "entry level", "associate", "junior", "mid-senior", "senior",
+        "director", "executive", "internship", "débutant", "confirmé",
+        "manager", "directeur", "executif",
+    }
+
     def __init__(self, page, context=None) -> None:
         self.page = page
         self.context = context
@@ -123,6 +137,8 @@ class JobScraper:
             for anchor_sel in [
                 "h1",
                 ".jobs-unified-top-card",
+                ".job-details-jobs-unified-top-card",
+                ".jobs-unified-top-card__job-title",
                 ".jobs-details__main-content",
                 "[data-job-id]",
                 "section.core-rail",
@@ -135,6 +151,9 @@ class JobScraper:
                     continue
             else:
                 await asyncio.sleep(4)
+
+            # Attente supplémentaire pour le rendu dynamique (company, location, etc.)
+            await asyncio.sleep(1.5)
 
             # Scroll pour déclencher le lazy-load des sections
             await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
@@ -158,103 +177,204 @@ class JobScraper:
     async def _extract_all(self, result: dict) -> None:
         page = self.page
 
+        # --- Stratégie 1 : JSON-LD (méthode la plus fiable) ---
+        await self._extract_from_jsonld(result)
+
         # --- Titre ---
-        title = await _try_selectors(page, [
-            "h1.topcard__title",
-            "h1.t-24.t-bold.inline",
-            "h1.t-24",
-            "h1[class*='job-title']",
-            "h1",
-        ])
-        if not title:
-            # Fallback balise <title>
-            title_tag = await page.title()
-            if title_tag:
-                title = re.sub(r"\s*[|\-–].*LinkedIn.*$", "", title_tag).strip()
-        if title:
-            result["title"] = title
+        if not result["title"]:
+            title = await _try_selectors(page, [
+                "h1.jobs-unified-top-card__job-title",
+                "h1.job-details-jobs-unified-top-card__job-title",
+                "h1.t-24.t-bold.inline",
+                "h1.t-24",
+                "h1[class*='job-title']",
+                "h1",
+            ])
+            if not title:
+                # Fallback balise <title>
+                title_tag = await page.title()
+                if title_tag:
+                    title = re.sub(r"\s*[|\-–].*LinkedIn.*$", "", title_tag).strip()
+            if title:
+                result["title"] = title
 
         # --- Entreprise (nom + URL) ---
-        company_url = await _try_attr_selectors(page, [
-            ("a.topcard__org-name-link", "href"),
-            ("a[data-tracking-control-name*='company']", "href"),
-            (".job-details-jobs-unified-top-card__company-name a", "href"),
-            (".topcard__flavor--black-link", "href"),
-        ])
-        company_name = await _try_selectors(page, [
-            "a.topcard__org-name-link",
-            ".job-details-jobs-unified-top-card__company-name a",
-            ".job-details-jobs-unified-top-card__company-name",
-            "a[data-tracking-control-name*='company']",
-            ".topcard__flavor--black-link",
-            "span.topcard__flavor a",
-        ])
-        if company_url:
-            result["company_url"] = company_url.split("?")[0]
-        if company_name:
-            result["company_name"] = company_name.strip()
+        if not result["company_url"]:
+            company_url = await _try_attr_selectors(page, [
+                ("a.jobs-unified-top-card__company-name", "href"),
+                ("div.job-details-jobs-unified-top-card__company-name a", "href"),
+                ("a.job-details-jobs-unified-top-card__company-name", "href"),
+                (".job-details-jobs-unified-top-card__company-name a", "href"),
+                ("a.topcard__org-name-link", "href"),
+                ("a[data-tracking-control-name*='company']", "href"),
+                (".topcard__flavor--black-link", "href"),
+                ("a[href*='/company/']", "href"),
+            ])
+            if company_url:
+                result["company_url"] = company_url.split("?")[0]
+
+        if not result["company_name"]:
+            company_name = await _try_selectors(page, [
+                "a.jobs-unified-top-card__company-name",
+                "div.job-details-jobs-unified-top-card__company-name a",
+                "a.job-details-jobs-unified-top-card__company-name",
+                ".job-details-jobs-unified-top-card__company-name a",
+                ".job-details-jobs-unified-top-card__company-name",
+                "a.topcard__org-name-link",
+                "a[data-tracking-control-name*='company']",
+                ".topcard__flavor--black-link",
+                "span.topcard__flavor a",
+            ])
+            if company_name:
+                result["company_name"] = company_name.strip()
 
         # --- Localisation ---
-        location = await _try_selectors(page, [
-            "span.topcard__flavor--bullet",
-            ".job-details-jobs-unified-top-card__bullet",
-            ".job-details-jobs-unified-top-card__workplace-type",
-            "span[class*='location']",
-            ".topcard__flavor:not(a)",
-        ])
-        if location:
-            result["location"] = location
+        if not result["location"]:
+            location = await _try_selectors(page, [
+                "span.jobs-unified-top-card__bullet",
+                "span.job-details-jobs-unified-top-card__bullet",
+                ".job-details-jobs-unified-top-card__bullet",
+                "span.jobs-unified-top-card__workplace-type",
+                ".job-details-jobs-unified-top-card__workplace-type",
+                "span.topcard__flavor--bullet",
+                "span[class*='location']",
+                "span[class*='bullet']",
+                ".topcard__flavor:not(a)",
+            ])
+            if location:
+                result["location"] = location
 
         # --- Date de publication ---
-        posted = await _try_selectors(page, [
-            "span.posted-time-ago__text",
-            "span[class*='posted-time']",
-            ".job-details-jobs-unified-top-card__posted-date",
-            "span[class*='time-ago']",
-            "time",
-        ])
-        if posted:
-            result["posted_time"] = posted
+        if not result["posted_time"]:
+            posted = await _try_selectors(page, [
+                "span.jobs-unified-top-card__posted-date",
+                "span.job-details-jobs-unified-top-card__posted-date",
+                ".job-details-jobs-unified-top-card__posted-date",
+                "span.posted-time-ago__text",
+                "span[class*='posted-time']",
+                "span[class*='time-ago']",
+                "span[class*='posted']",
+                "time",
+            ])
+            if posted:
+                result["posted_time"] = posted
 
         # --- Nombre de candidats ---
-        applicants = await _try_selectors(page, [
-            "span.num-applicants__caption",
-            "span[class*='num-applicants']",
-            ".job-details-jobs-unified-top-card__applicant-count",
-            "span[class*='applicant']",
-            "figcaption[class*='applicant']",
-        ])
-        if applicants:
-            result["applicants_count"] = applicants
+        if not result["applicants_count"]:
+            applicants = await _try_selectors(page, [
+                "span.jobs-unified-top-card__applicant-count",
+                "span.job-details-jobs-unified-top-card__applicant-count",
+                ".job-details-jobs-unified-top-card__applicant-count",
+                "span.num-applicants__caption",
+                "span[class*='num-applicants']",
+                "span[class*='applicant']",
+                "figcaption[class*='applicant']",
+            ])
+            if applicants:
+                result["applicants_count"] = applicants
 
         # --- Description ---
-        # Essayer d'abord de cliquer sur "Voir plus" pour déplier la description
-        try:
-            see_more = page.locator(
-                "button.show-more-less-html__button, "
-                "button[aria-label*='more'], "
-                "button[class*='show-more']"
-            ).first
-            if await see_more.count() > 0:
-                await see_more.click()
-                await asyncio.sleep(0.5)
-        except Exception:
-            pass
+        if not result["description"]:
+            # Essayer d'abord de cliquer sur "Voir plus" pour déplier la description
+            try:
+                see_more = page.locator(
+                    "button.show-more-less-html__button, "
+                    "button.jobs-description__footer-button, "
+                    "button[aria-label*='more'], "
+                    "button[class*='show-more']"
+                ).first
+                if await see_more.count() > 0:
+                    await see_more.click()
+                    await asyncio.sleep(0.5)
+            except Exception:
+                pass
 
-        description = await _try_selectors(page, [
-            "div.show-more-less-html__markup",
-            "div[class*='show-more-less-html__markup']",
-            ".job-details-jobs-unified-top-card__job-insight",
-            "div.description__text",
-            "section.description div",
-            "#job-details",
-            "div[class*='description']",
-        ])
-        if description:
-            result["description"] = description
+            description = await _try_selectors(page, [
+                "div.show-more-less-html__markup",
+                "div[class*='show-more-less-html__markup']",
+                "#job-details",
+                "div.jobs-description__content",
+                "div.jobs-box__html-content",
+                ".job-details-jobs-unified-top-card__job-insight",
+                "div.description__text",
+                "section.description div",
+                "div[class*='description']",
+            ])
+            if description:
+                result["description"] = description
 
         # --- Critères (séniorité, type contrat, fonction, secteur) ---
         await self._extract_criteria(result)
+
+    # ------------------------------------------------------------------
+    # Extraction depuis JSON-LD (stratégie principale)
+    # ------------------------------------------------------------------
+
+    async def _extract_from_jsonld(self, result: dict) -> None:
+        """Extrait les données depuis les balises <script type='application/ld+json'>."""
+        try:
+            scripts = await self.page.query_selector_all('script[type="application/ld+json"]')
+            for script in scripts:
+                try:
+                    content = await script.inner_text()
+                    data = json.loads(content)
+                except Exception:
+                    continue
+
+                if not isinstance(data, dict):
+                    continue
+                if data.get("@type") != "JobPosting":
+                    continue
+
+                if not result["title"] and data.get("title"):
+                    result["title"] = data["title"].strip()
+
+                if not result["description"] and data.get("description"):
+                    result["description"] = _strip_tags(data["description"])
+
+                hiring_org = data.get("hiringOrganization", {})
+                if isinstance(hiring_org, dict):
+                    if not result["company_name"] and hiring_org.get("name"):
+                        result["company_name"] = hiring_org["name"].strip()
+                    if not result["company_url"] and hiring_org.get("sameAs"):
+                        result["company_url"] = hiring_org["sameAs"].split("?")[0]
+
+                # Localisation depuis jobLocation
+                if not result["location"]:
+                    job_loc = data.get("jobLocation", {})
+                    if isinstance(job_loc, list):
+                        job_loc = job_loc[0] if job_loc else {}
+                    address = job_loc.get("address", {}) if isinstance(job_loc, dict) else {}
+                    if isinstance(address, dict):
+                        parts = [
+                            address.get("addressLocality", ""),
+                            address.get("addressRegion", ""),
+                            address.get("addressCountry", ""),
+                        ]
+                        loc_str = ", ".join(p for p in parts if p)
+                        if loc_str:
+                            result["location"] = loc_str
+
+                if not result["employment_type"] and data.get("employmentType"):
+                    result["employment_type"] = data["employmentType"]
+
+                if not result["posted_time"] and data.get("datePosted"):
+                    result["posted_time"] = data["datePosted"]
+
+                if not result["seniority_level"] and data.get("experienceRequirements"):
+                    req = data["experienceRequirements"]
+                    if isinstance(req, dict):
+                        result["seniority_level"] = req.get("name") or req.get("educationalCredentialAwarded")
+                    elif isinstance(req, str):
+                        result["seniority_level"] = req
+
+                if not result["industries"] and data.get("industry"):
+                    result["industries"] = data["industry"]
+
+                # Un seul bloc JobPosting suffit
+                return
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Extraction des critères structurés
@@ -263,7 +383,7 @@ class JobScraper:
     async def _extract_criteria(self, result: dict) -> None:
         page = self.page
 
-        # Stratégie 1 : liste <li> avec header h3 + span valeur
+        # Stratégie A : liste <li> avec header h3 + span valeur (ancienne UI)
         criteria_items = page.locator(
             "li.description__job-criteria-item, "
             "li[class*='job-criteria-item']"
@@ -302,7 +422,29 @@ class JobScraper:
                     continue
             return
 
-        # Stratégie 2 : sections "insight" unifiées (nouvelle UI LinkedIn)
+        # Stratégie B : pills sans étiquettes (nouvelle UI LinkedIn)
+        pill_items = page.locator(
+            "li.job-details-preferences-and-skills__pill, "
+            "span.job-details-preferences-and-skills__pill, "
+            "li[class*='preferences-and-skills__pill']"
+        )
+        count_pills = await pill_items.count()
+        if count_pills > 0:
+            for i in range(count_pills):
+                item = pill_items.nth(i)
+                try:
+                    text = (await item.inner_text()).strip()
+                    text_lower = text.lower()
+                    if any(k in text_lower for k in self._EMPLOYMENT_KEYWORDS):
+                        if not result["employment_type"]:
+                            result["employment_type"] = text
+                    elif any(k in text_lower for k in self._SENIORITY_KEYWORDS):
+                        if not result["seniority_level"]:
+                            result["seniority_level"] = text
+                except Exception:
+                    continue
+
+        # Stratégie C : sections "insight" unifiées (nouvelle UI LinkedIn)
         insight_items = page.locator(
             "li.job-details-jobs-unified-top-card__job-insight, "
             "li[class*='job-insight'], "
@@ -314,17 +456,16 @@ class JobScraper:
                 item = insight_items.nth(i)
                 try:
                     text = (await item.inner_text()).strip().lower()
-                    # Heuristiques simples sur le texte brut
-                    if any(k in text for k in ["temps plein", "full-time", "part-time", "cdi", "cdd", "stage", "alternance"]):
+                    if any(k in text for k in self._EMPLOYMENT_KEYWORDS):
                         if not result["employment_type"]:
                             result["employment_type"] = (await item.inner_text()).strip()
-                    if any(k in text for k in ["junior", "senior", "confirmé", "mid-senior", "entry"]):
+                    if any(k in text for k in self._SENIORITY_KEYWORDS):
                         if not result["seniority_level"]:
                             result["seniority_level"] = (await item.inner_text()).strip()
                 except Exception:
                     continue
 
-        # Stratégie 3 : extraire depuis le HTML brut de la page
+        # Stratégie D : extraire depuis le HTML brut de la page
         try:
             html = await page.content()
             await self._extract_criteria_from_html(html, result)
