@@ -9,6 +9,7 @@ Stratégie :
      les cartes HTML présentes dans la page.
 """
 import asyncio
+import json
 import random
 import re
 import urllib.parse
@@ -57,7 +58,6 @@ class PeopleScraper:
             url = response.url
             if "voyager/api" not in url:
                 return
-            # On cible les endpoints qui contiennent des profils
             if not any(k in url for k in ("search/blended", "graphql", "members", "people", "search/cluster")):
                 return
             try:
@@ -67,8 +67,8 @@ class PeopleScraper:
                 body = await response.json()
                 profiles = self._parse_voyager_response(body)
                 intercepted.extend(profiles)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  ⚠️  Erreur interception : {e}")
 
         self.page.on("response", _on_response)
 
@@ -170,53 +170,88 @@ class PeopleScraper:
                 results.extend(self._deep_search_profiles(item, _depth + 1))
             return results
 
-        # Détecter un nœud "profil" : doit avoir un publicIdentifier ou un firstName+lastName
-        pub_id = obj.get("publicIdentifier") or obj.get("vanityName") or obj.get("profileId")
-        first = obj.get("firstName") or ""
-        last = obj.get("lastName") or ""
+        # ── Helpers internes ──────────────────────────────────────────
+        def _str(val) -> str:
+            """Retourne val seulement si c'est une vraie string non vide."""
+            return val if isinstance(val, str) and val.strip() else ""
 
-        if pub_id or (first and last):
-            name = f"{first} {last}".strip() if (first or last) else ""
-            # Titre : plusieurs clés possibles selon l'endpoint
-            headline = (
-                obj.get("headline")
-                or obj.get("title")
-                or obj.get("occupation")
-                or ""
-            )
-            if isinstance(headline, dict):
-                headline = headline.get("text", "")
+        def _text(val) -> str:
+            """Extrait le texte d'une valeur string ou dict {"text": ...}."""
+            if isinstance(val, str):
+                return val.strip()
+            if isinstance(val, dict):
+                return _str(val.get("text") or val.get("value") or val.get("defaultLocalizedName", ""))
+            return ""
 
-            location = obj.get("locationName") or obj.get("geoLocationName") or ""
-            if isinstance(location, dict):
-                location = location.get("defaultLocalizedName", "")
+        # ── Détection d'un nœud profil ────────────────────────────────
+        # publicIdentifier / vanityName / profileId doivent être de vraies strings
+        pub_id = _str(obj.get("publicIdentifier")) or _str(obj.get("vanityName")) or _str(obj.get("profileId"))
+        first  = _str(obj.get("firstName"))
+        last   = _str(obj.get("lastName"))
 
-            degree_raw = (
-                obj.get("distance", {}) if isinstance(obj.get("distance"), dict) else {}
-            )
-            degree = degree_raw.get("value", "") or obj.get("connectionDegree", "")
-            degree = self._normalize_degree(str(degree))
+        is_profile = bool(pub_id) or bool(first and last)
+        if not is_profile:
+            # Descendre dans les valeurs
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    results.extend(self._deep_search_profiles(v, _depth + 1))
+            return results
 
-            profile_url = ""
-            if pub_id:
-                profile_url = f"https://www.linkedin.com/in/{pub_id}"
-            elif obj.get("navigationUrl"):
-                profile_url = obj["navigationUrl"].split("?")[0]
+        # ── Nom ───────────────────────────────────────────────────────
+        name = f"{first} {last}".strip() if (first or last) else ""
 
-            if name and profile_url:
-                results.append({
-                    "name": name,
-                    "title": headline,
-                    "connection_degree": degree,
-                    "location": location,
-                    "profile_url": profile_url,
-                })
-                return results  # Ne pas descendre plus dans ce nœud
+        # ── Titre / headline ──────────────────────────────────────────
+        headline = _text(
+            obj.get("headline") or obj.get("title") or obj.get("occupation") or ""
+        )
 
-        # Descendre dans les valeurs
-        for v in obj.values():
-            if isinstance(v, (dict, list)):
-                results.extend(self._deep_search_profiles(v, _depth + 1))
+        # ── Localisation ──────────────────────────────────────────────
+        # Voyager expose la localisation sous plusieurs clés selon l'endpoint
+        location = (
+            _text(obj.get("geoLocation"))              # graphql récent
+            or _text(obj.get("location"))
+            or _text(obj.get("locationName"))
+            or _text(obj.get("geoLocationName"))
+            or _text(obj.get("formattedLocation"))
+            or ""
+        )
+        # Parfois c'est dans un sous-objet "primarySubtitle" ou "secondarySubtitle"
+        if not location:
+            for sub_key in ("primarySubtitle", "secondarySubtitle", "locationUnion"):
+                sub = obj.get(sub_key)
+                if sub:
+                    location = _text(sub)
+                    if location:
+                        break
+
+        # ── Degré de connexion ────────────────────────────────────────
+        # Voyager : "distance" peut être {"value": "DISTANCE_2"} ou directement une string
+        degree = ""
+        dist = obj.get("distance")
+        if isinstance(dist, dict):
+            degree = _str(dist.get("value") or dist.get("backendUrn", ""))
+        elif isinstance(dist, str):
+            degree = dist
+        if not degree:
+            degree = _str(obj.get("connectionDegree") or obj.get("memberRelationship", ""))
+        degree = self._normalize_degree(degree)
+
+        # ── URL profil ────────────────────────────────────────────────
+        profile_url = ""
+        if pub_id:
+            profile_url = f"https://www.linkedin.com/in/{pub_id}"
+        elif obj.get("navigationUrl"):
+            nav = obj["navigationUrl"]
+            profile_url = (_text(nav) or "").split("?")[0]
+
+        if name and profile_url:
+            results.append({
+                "name": name,
+                "title": headline,
+                "connection_degree": degree,
+                "location": location,
+                "profile_url": profile_url,
+            })
 
         return results
 
@@ -309,7 +344,7 @@ class PeopleScraper:
                 const processLink = (link, card) => {
                     const href = link.href.split('?')[0];
                     if (seen.has(href)) return;
-                    if (/\/(mynetwork|messaging|jobs|feed|learning)/.test(href)) return;
+                    if (/(mynetwork|messaging|jobs|feed|learning)/.test(href)) return;
                     seen.add(href);
 
                     const name = extractName(link, card);

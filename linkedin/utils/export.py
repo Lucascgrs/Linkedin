@@ -76,7 +76,13 @@ class ExportUtils:
         ws.freeze_panes = "A2"
 
         for row in data:
-            ws.append([row.get(h) for h in headers])
+            cells = []
+            for h in headers:
+                val = row.get(h)
+                if isinstance(val, (list, dict)):
+                    val = json.dumps(val, ensure_ascii=False)
+                cells.append(val)
+            ws.append(cells)
 
         # Auto-adjust column widths
         for col in ws.columns:
