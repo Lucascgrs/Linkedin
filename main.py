@@ -17,8 +17,6 @@ from linkedin.utils.stealth_browser import StealthBrowser as BrowserManager
 
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
-from linkedin.scrapers.company_scraper import CompanyScraper
-from linkedin.scrapers.job_scraper import JobScraper
 from linkedin.scrapers.people_scraper import PeopleScraper
 from linkedin.scrapers.posts_scraper import PostsScraper
 from linkedin.search.company_search import CompanySearch
@@ -65,23 +63,6 @@ async def exemple_recherche_emplois():
         ExportUtils.to_json_and_excel(results, "output/jobs", "Offres")
 
 
-# ============================================================
-# Exemple 3 : Scraper une entreprise spécifique
-# ============================================================
-
-async def exemple_scrape_entreprise(company_url: str):
-    """Scrape details for a single company and export to JSON + Excel.
-
-    Args:
-        company_url: LinkedIn company URL, e.g.
-                     "https://www.linkedin.com/company/microsoft/"
-    """
-    async with BrowserManager(headless=False) as browser:
-        await SessionManager.load(browser)
-        scraper = CompanyScraper(browser.page)
-        result = await scraper.scrape(company_url)
-        ExportUtils.to_json_and_excel([result], "output/company", "Entreprise")
-
 
 # ============================================================
 # Exemple 4 : Employés d'une entreprise
@@ -125,23 +106,6 @@ async def exemple_posts(company_url: str):
         )
         ExportUtils.to_json_and_excel(results, "output/posts", "Posts")
 
-
-# ============================================================
-# Exemple 6 : Scraper une offre d'emploi spécifique
-# ============================================================
-
-async def exemple_scrape_offre(job_url: str):
-    """Scrape details for a single job offer.
-
-    Args:
-        job_url: LinkedIn job URL, e.g.
-                 "https://www.linkedin.com/jobs/view/1234567890/"
-    """
-    async with BrowserManager(headless=False) as browser:
-        await SessionManager.load(browser)
-        scraper = JobScraper(browser.page, browser.context)
-        result = await scraper.scrape(job_url)
-        ExportUtils.to_json_and_excel([result], "output/job", "Offre")
 
 
 # ============================================================
@@ -194,6 +158,108 @@ async def exemple_messages_bulk(contacts: list[dict]):
 
 
 # ============================================================
+# Pipeline complet : recherche entreprises → posts + employés
+# ============================================================
+
+async def pipeline_entreprises(
+    pays: str = "france",
+    secteur: str = "",
+    taille: list[str] | None = None,
+    keywords: str = "",
+    max_companies: int = 10,
+    filtre_poste: str = "",
+    max_personnes: int = 20,
+    max_posts: int = 10,
+):
+    """
+    Pipeline complet :
+      1. Recherche et scrape les entreprises correspondant aux filtres.
+      2. Pour chaque entreprise trouvée dans le JSON sauvegardé,
+         scrape ses posts ET ses employés avec les filtres fournis.
+      3. Sauvegarde tout dans output/.
+
+    Args:
+        pays:          Pays de l'entreprise (ex: "france").
+        secteur:       Secteur d'activité (ex: "software", "finance").
+        taille:        Tailles d'entreprise (ex: ["11-50", "51-200"]).
+        keywords:      Mots-clés pour la recherche d'entreprises.
+        max_companies: Nombre maximum d'entreprises à traiter.
+        filtre_poste:  Filtre sur le titre de poste pour les employés (ex: "developer").
+        max_personnes: Nombre maximum d'employés à scraper par entreprise.
+        max_posts:     Nombre maximum de posts à scraper par entreprise.
+    """
+    async with BrowserManager(headless=False) as browser:
+        await SessionManager.load(browser)
+
+        # ── Étape 1 : Recherche + scrape des entreprises ────────────────
+        print("\n═══ ÉTAPE 1 : Recherche des entreprises ═══")
+        search = CompanySearch(browser.page)
+        companies = await search.search_and_scrape(
+            pays=pays,
+            secteur=secteur,
+            taille=taille or [],
+            keywords=keywords,
+            max_companies=max_companies,
+        )
+        ExportUtils.to_json_and_excel(companies, "output/pipeline_companies", "Entreprises")
+        print(f"  → {len(companies)} entreprise(s) trouvée(s) et sauvegardées.")
+
+        # ── Étape 2 : Scrape posts + employés pour chaque entreprise ────
+        people_scraper = PeopleScraper(browser.page)
+        posts_scraper  = PostsScraper(browser.page)
+
+        all_people: list[dict] = []
+        all_posts:  list[dict] = []
+
+        for i, company in enumerate(companies, 1):
+            company_url = company.get("linkedin_url", "")
+            company_name = company.get("name", company_url)
+            if not company_url:
+                print(f"  [{i}/{len(companies)}] URL manquante, entreprise ignorée.")
+                continue
+
+            print(f"\n═══ ÉTAPE 2 [{i}/{len(companies)}] : {company_name} ═══")
+
+            # -- Posts --
+            print(f"  → Scrape des posts ({max_posts} max)...")
+            try:
+                posts = await posts_scraper.scrape(company_url, limit=max_posts)
+                for post in posts:
+                    post["_company_url"] = company_url
+                    post["_company_name"] = company_name
+                all_posts.extend(posts)
+                print(f"     {len(posts)} post(s) récupéré(s).")
+            except Exception as e:
+                print(f"     ✗ Erreur posts : {e}")
+
+            # -- Employés --
+            print(f"  → Scrape des employés ({max_personnes} max, filtre: '{filtre_poste or 'aucun'}')...")
+            try:
+                people = await people_scraper.scrape_company_people(
+                    company_url=company_url,
+                    filtre_poste=filtre_poste,
+                    max_personnes=max_personnes,
+                )
+                for person in people:
+                    person["_company_url"] = company_url
+                    person["_company_name"] = company_name
+                all_people.extend(people)
+                print(f"     {len(people)} employé(s) récupéré(s).")
+            except Exception as e:
+                print(f"     ✗ Erreur employés : {e}")
+
+        # ── Étape 3 : Export global ──────────────────────────────────────
+        print("\n═══ ÉTAPE 3 : Export des résultats ═══")
+        if all_posts:
+            ExportUtils.to_json_and_excel(all_posts, "output/pipeline_posts", "Posts")
+        if all_people:
+            ExportUtils.to_json_and_excel(all_people, "output/pipeline_people", "Employés")
+
+        print(f"\n✓ Pipeline terminé : {len(companies)} entreprise(s), "
+              f"{len(all_posts)} post(s), {len(all_people)} employé(s).")
+
+
+# ============================================================
 # Entry point — uncomment the example you want to run
 # ============================================================
 
@@ -204,23 +270,17 @@ if __name__ == "__main__":
     # --- Example 2: Search jobs ---
     #asyncio.run(exemple_recherche_emplois())
 
-    # --- Example 3: Scrape a single company ---
-    # asyncio.run(exemple_scrape_entreprise(
-    #     "https://www.linkedin.com/company/COMPANY_SLUG/"
-    # ))
-
     # --- Example 4: Scrape employees ---
     # asyncio.run(exemple_employes("https://www.linkedin.com/company/datasulting/"))
 
     # --- Example 5: Scrape posts ---
     # asyncio.run(exemple_posts("https://www.linkedin.com/company/Datasulting/"))
 
-    # --- Example 6: Scrape a single job offer ---
-    #asyncio.run(exemple_scrape_offre("https://www.linkedin.com/jobs/view/4330500772/"))
-
-
     # --- Example 7: Send a message ---
-    asyncio.run(exemple_message(profile_url="https://www.linkedin.com/in/luc-maurette/",message="Bonjour, je vous contacte car..."))
+    # asyncio.run(exemple_message(
+    #     profile_url="https://www.linkedin.com/in/luc-maurette/",
+    #     message="Bonjour, je vous contacte car...",
+    # ))
 
     # --- Example 8: Bulk messages ---
     # asyncio.run(exemple_messages_bulk([
@@ -229,3 +289,16 @@ if __name__ == "__main__":
     #         "message": "Bonjour, je vous contacte car...",
     #     },
     # ]))
+
+    # --- Pipeline complet : recherche entreprises → posts + employés ---
+    asyncio.run(pipeline_entreprises(
+        pays="france",
+        secteur="conseil",
+        taille=["11-50", "51-200"],
+        keywords="",
+        max_companies=10,
+        filtre_poste="",        # ex: "developer", "manager", ...
+        max_personnes=10,
+        max_posts=5,
+    ))
+
