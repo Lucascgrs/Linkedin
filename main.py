@@ -99,7 +99,7 @@ async def exemple_employes(company_url: str):
         scraper = PeopleScraper(browser.page)
         results = await scraper.scrape_company_people(
             company_url=company_url,
-            filtre_poste="data",
+            filtre_poste="",
             max_personnes=20,
         )
         ExportUtils.to_json_and_excel(results, "output/people", "Employés")
@@ -234,7 +234,7 @@ if __name__ == "__main__":
     #asyncio.run(exemple_recherche_entreprises())
 
     # --- Example 2: Search jobs ---
-    asyncio.run(exemple_recherche_emplois())
+    #asyncio.run(exemple_recherche_emplois())
 
     # --- Example 3: Scrape a single company ---
     # asyncio.run(exemple_scrape_entreprise(
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     # ))
 
     # --- Example 4: Scrape employees ---
-    #asyncio.run(exemple_employes("https://www.linkedin.com/company/COMPANY_SLUG/"))
+    asyncio.run(exemple_employes("https://www.linkedin.com/company/datasulting/"))
 
     # --- Example 5: Scrape posts ---
     # asyncio.run(exemple_posts(
