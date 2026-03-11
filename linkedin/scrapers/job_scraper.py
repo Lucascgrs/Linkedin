@@ -189,14 +189,14 @@ class JobScraper:
             try:
                 html_len = len(await self.page.content())
                 if html_len < 5000:
-                    print(f"  ⚠️ Page trop courte ({html_len} chars) — possible blocage LinkedIn pour {linkedin_url}")
+                    pass
             except Exception:
                 pass
 
             await self._extract_all(result)
 
-        except Exception as e:
-            print(f"  ⚠️ Erreur scraping {linkedin_url} : {e}")
+        except Exception:
+            pass
 
         return result
 
@@ -335,10 +335,6 @@ class JobScraper:
         # --- Critères (séniorité, type contrat, fonction, secteur) ---
         await self._extract_criteria(result)
 
-        # --- Log diagnostic si des champs sont encore null ---
-        null_fields = [k for k, v in result.items() if v is None and k != "linkedin_url"]
-        if null_fields:
-            print(f"  ℹ️ Champs null après extraction : {null_fields}")
 
     # ------------------------------------------------------------------
     # Extraction localisation / date / candidats depuis le paragraphe meta

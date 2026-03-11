@@ -240,14 +240,10 @@ def resolve_filter(value: str, mapping: dict, filter_name: str) -> Optional[str]
 
     matches = [(k, v) for k, v in mapping.items() if key in k or k in key]
     if len(matches) == 1:
-        print(f"  ℹ️  [{filter_name}] '{value}' → '{matches[0][0]}' (id={matches[0][1]})")
         return matches[0][1]
     elif len(matches) > 1:
-        print(f"  ⚠️  [{filter_name}] '{value}' ambigu : {[m[0] for m in matches]} → '{matches[0][0]}' utilisé")
         return matches[0][1]
 
-    print(f"  ⚠️  [{filter_name}] '{value}' non reconnu, filtre ignoré.")
-    print(f"      Disponibles : {', '.join(list(mapping.keys())[:12])}...")
     return None
 
 

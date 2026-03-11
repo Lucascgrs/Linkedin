@@ -13,7 +13,6 @@ async def _wait_for_manual_login(page, timeout: int = 300_000) -> None:
     while True:
         url = page.url
         if "linkedin.com/feed" in url or "linkedin.com/in/" in url or "linkedin.com/jobs" in url:
-            print("✅ Connexion détectée !")
             return
         if asyncio.get_running_loop().time() > deadline:
             raise TimeoutError("Délai de connexion dépassé")
@@ -74,4 +73,3 @@ class SessionManager:
             raise RuntimeError(
                 "Session expirée ou invalide. Relance : python Sessions.py"
             )
-        print(f"✓ Session LinkedIn active ({session_path})")

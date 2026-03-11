@@ -94,8 +94,8 @@ class CompanyScraper:
                     if best:
                         result["about_us"] = best
                         break
-        except Exception as e:
-            print(f"  ⚠️ about_us error: {e}")
+        except Exception:
+            pass
 
         # --- dt/dd label parsing (FR + EN) ---
         try:
@@ -137,7 +137,7 @@ class CompanyScraper:
                     if lines:
                         result[field] = lines[0]
 
-        except Exception as e:
-            print(f"  ⚠️ dt/dd parsing error: {e}")
+        except Exception:
+            pass
 
         return result

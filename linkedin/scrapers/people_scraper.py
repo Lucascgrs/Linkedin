@@ -67,8 +67,8 @@ class PeopleScraper:
                 body = await response.json()
                 profiles = self._parse_voyager_response(body)
                 intercepted.extend(profiles)
-            except Exception as e:
-                print(f"  ⚠️  Erreur interception : {e}")
+            except Exception:
+                return
 
         self.page.on("response", _on_response)
 
@@ -76,8 +76,6 @@ class PeopleScraper:
             await self.page.goto(people_url, wait_until="domcontentloaded")
             await asyncio.sleep(5)
 
-            current_url = self.page.url
-            print(f"  📄 Page chargée : {current_url}")
 
             all_people: list[dict] = []
             no_new_count = 0
@@ -106,12 +104,10 @@ class PeopleScraper:
                                 break
 
                 added = len(all_people) - prev_len
-                print(f"  👥 Passe {scroll_idx + 1} : {len(all_people)} profil(s) total ({added} nouveaux)")
 
                 if added == 0:
                     no_new_count += 1
                     if no_new_count >= 3:
-                        print("  ⚠️  Aucun nouveau profil depuis 3 passes — arrêt.")
                         break
                 else:
                     no_new_count = 0
@@ -382,8 +378,8 @@ class PeopleScraper:
                 return results;
             }""")
             people = raw if raw else []
-        except Exception as e:
-            print(f"  ⚠️  Erreur fallback DOM : {e}")
+        except Exception:
+            pass
         return people
 
     # ------------------------------------------------------------------ #

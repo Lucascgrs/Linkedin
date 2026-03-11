@@ -163,7 +163,6 @@ async def exemple_message(profile_url: str, message: str):
             profile_url=profile_url,
             message=message,
         )
-        print("✅ Message envoyé" if success else "❌ Échec de l'envoi")
 
 
 # ============================================================
@@ -195,92 +194,6 @@ async def exemple_messages_bulk(contacts: list[dict]):
 
 
 # ============================================================
-# Exemple 9 (DIAGNOSTIC) : Sauvegarder le HTML d'une offre
-# ============================================================
-
-async def diagnostic_html_offre(job_url: str):
-    """Sauvegarde le HTML brut d'une offre pour inspecter les vraies classes CSS LinkedIn.
-
-    Usage :
-        1. Lancer cette fonction avec l'URL d'une offre
-        2. Ouvrir output/debug_job.html dans un navigateur ou éditeur
-        3. Chercher les classes CSS autour du titre, de l'entreprise, etc.
-
-    Args:
-        job_url: URL LinkedIn de l'offre, ex. "https://www.linkedin.com/jobs/view/1234567890/"
-    """
-    import os
-    async with BrowserManager(headless=False) as browser:
-        await SessionManager.load(browser)
-        page = browser.page
-        await page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
-        import asyncio as _a
-        await _a.sleep(5)
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await _a.sleep(2)
-        html = await page.content()
-        os.makedirs("output", exist_ok=True)
-        with open("output/debug_job.html", "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"✅ HTML sauvegardé dans output/debug_job.html ({len(html)} chars)")
-
-
-# ============================================================
-# Exemple 10 (DIAGNOSTIC) : Sauvegarder le HTML des posts + API interceptée
-# ============================================================
-
-async def diagnostic_posts(company_url: str):
-    """Sauvegarde le HTML de la page posts ET les réponses JSON de l'API LinkedIn interceptées.
-
-    Utilité : comprendre la vraie structure DOM pour reposts et vidéos.
-
-    Usage :
-        1. asyncio.run(diagnostic_posts("https://www.linkedin.com/company/datasulting/"))
-        2. Inspecter output/debug_posts.html pour les classes CSS
-        3. Inspecter output/debug_api_responses.json pour les données JSON brutes
-    """
-    import os
-    import json as _json
-
-    api_responses = []
-
-    async def capture_response(response):
-        url = response.url
-        if "voyager/api/feed" in url or "voyagerFeed" in url:
-            try:
-                body = await response.body()
-                data = _json.loads(body)
-                api_responses.append({"url": url, "data": data})
-            except Exception:
-                pass
-
-    async with BrowserManager(headless=False) as browser:
-        await SessionManager.load(browser)
-        page = browser.page
-        page.on("response", capture_response)
-
-        posts_url = company_url.rstrip('/') + '/posts/'
-        await page.goto(posts_url, wait_until="domcontentloaded", timeout=30000)
-        import asyncio as _a
-        await _a.sleep(4)
-        # Scroll pour charger les posts
-        for _ in range(4):
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await _a.sleep(2)
-
-        html = await page.content()
-        os.makedirs("output", exist_ok=True)
-        with open("output/debug_posts.html", "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"✅ HTML sauvegardé : output/debug_posts.html ({len(html)} chars)")
-
-        await _a.sleep(1)  # laisser les dernières réponses arriver
-        with open("output/debug_api_responses.json", "w", encoding="utf-8") as f:
-            _json.dump(api_responses, f, ensure_ascii=False, indent=2)
-        print(f"✅ {len(api_responses)} réponse(s) API sauvegardées : output/debug_api_responses.json")
-
-
-# ============================================================
 # Entry point — uncomment the example you want to run
 # ============================================================
 
@@ -303,23 +216,11 @@ if __name__ == "__main__":
     # asyncio.run(exemple_posts("https://www.linkedin.com/company/Datasulting/"))
 
     # --- Example 6: Scrape a single job offer ---
-    # asyncio.run(exemple_scrape_offre(
-    #     "https://www.linkedin.com/jobs/view/JOB_ID/"
-    # ))
+    #asyncio.run(exemple_scrape_offre("https://www.linkedin.com/jobs/view/4330500772/"))
 
-    # --- Example 9: DIAGNOSTIC — Sauvegarder le HTML d'une offre pour inspecter les classes CSS ---
-    # asyncio.run(diagnostic_html_offre(
-    #     "https://www.linkedin.com/jobs/view/4379667856"
-    # ))
-
-    # --- Example 10: DIAGNOSTIC — HTML posts + réponses API interceptées ---
-    # asyncio.run(diagnostic_posts("https://www.linkedin.com/company/datasulting/"))
 
     # --- Example 7: Send a message ---
-    # asyncio.run(exemple_message(
-    #     profile_url="https://www.linkedin.com/in/PROFILE_SLUG/",
-    #     message="Bonjour, je vous contacte car...",
-    # ))
+    asyncio.run(exemple_message(profile_url="https://www.linkedin.com/in/luc-maurette/",message="Bonjour, je vous contacte car..."))
 
     # --- Example 8: Bulk messages ---
     # asyncio.run(exemple_messages_bulk([

@@ -167,12 +167,10 @@ class JobSearch:
         scraper = JobScraper(self.page, self.page.context)
         results = []
         for i, url in enumerate(urls, 1):
-            print(f"  [{i:2d}/{len(urls)}] {url}")
             try:
                 job = await scraper.scrape(url)
                 results.append(job)
             except Exception as e:
-                print(f"         ⚠️ Erreur : {e}")
                 results.append({"linkedin_url": url, "error": str(e)})
             await asyncio.sleep(random.uniform(2, 4))
         return results
@@ -204,6 +202,6 @@ class JobSearch:
                 if "/jobs/view/" in clean and clean not in seen:
                     seen.add(clean)
                     urls.append(clean)
-        except Exception as e:
-            print(f"  ⚠️ Erreur extraction URLs offres : {e}")
+        except Exception:
+            pass
         return urls

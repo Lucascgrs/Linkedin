@@ -62,8 +62,6 @@ class StealthBrowser:
             storage_state=storage_state,
         )
 
-        if storage_state:
-            print(f"✓ Session chargée depuis {self.session_path}")
 
         self.page = await self.context.new_page()
 
@@ -83,7 +81,6 @@ class StealthBrowser:
         storage = await self.context.storage_state()
         with open(path, "w", encoding="utf-8") as f:
             json.dump(storage, f)
-        print(f"✅ Session sauvegardée dans {path}")
 
     async def load_session(self, path: str) -> None:
         """
@@ -96,4 +93,3 @@ class StealthBrowser:
         with open(path, encoding="utf-8") as f:
             storage = json.load(f)
         await self.context.add_cookies(storage.get("cookies", []))
-        print(f"✓ Cookies rechargés depuis {path}")

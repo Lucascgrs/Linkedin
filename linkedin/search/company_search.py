@@ -143,12 +143,10 @@ class CompanySearch:
         scraper = CompanyScraper(self.page)
         results = []
         for i, url in enumerate(urls, 1):
-            print(f"  [{i:2d}/{len(urls)}] {url}")
             try:
                 company = await scraper.scrape(url)
                 results.append(company)
             except Exception as e:
-                print(f"         ⚠️ Erreur : {e}")
                 results.append({"linkedin_url": url, "error": str(e)})
             await asyncio.sleep(random.uniform(3, 6))
         return results
@@ -167,7 +165,7 @@ class CompanySearch:
             elif s in COMPANY_SIZE_IDS:
                 codes.append(COMPANY_SIZE_IDS[s])
             else:
-                print(f"  ⚠️  Taille '{s}' non reconnue. Valeurs : {list(COMPANY_SIZE_IDS.keys())}")
+                pass
         return codes
 
     async def _extract_company_urls_from_page(self) -> list[str]:
@@ -199,6 +197,6 @@ class CompanySearch:
                         clean = "https://www.linkedin.com" + clean
                     seen.add(clean)
                     urls.append(clean)
-        except Exception as e:
-            print(f"  ⚠️ Erreur extraction URLs : {e}")
+        except Exception:
+            pass
         return urls
