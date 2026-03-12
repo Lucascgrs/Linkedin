@@ -8,8 +8,21 @@ Run a specific example by calling it from the __main__ block.
 Setup:
     1. Install dependencies:   pip install -r requirements.txt
     2. Install browser:        playwright install chromium
-    3. Create your session:    python Sessions.py
+    3. Create your sessions:   python Sessions.py
+         → choisir 1 (compte PRINCIPAL)  : linkedin_session_main.json
+         → choisir 2 (compte SCRAPER)    : linkedin_session_scraper.json
     4. Run an example below.
+
+Architecture dual-session :
+    ┌─────────────────────────────────────────────────────────┐
+    │  account="scraper"  →  linkedin_session_scraper.json    │
+    │    Utilisé pour : recherche entreprises, scraping        │
+    │    profils/posts/employés — peut être banni sans risque  │
+    ├─────────────────────────────────────────────────────────┤
+    │  account="main"     →  linkedin_session_main.json        │
+    │    Utilisé pour : envoi de messages, candidatures,       │
+    │    ajout de contacts — NE DOIT PAS être banni            │
+    └─────────────────────────────────────────────────────────┘
 """
 import asyncio
 
@@ -22,15 +35,16 @@ from linkedin.scrapers.posts_scraper import PostsScraper
 from linkedin.search.company_search import CompanySearch
 from linkedin.search.job_search import JobSearch
 from linkedin.actions.messenger import LinkedInMessenger
+from linkedin.actions.connection_manager import ConnectionManager
 
 
 # ============================================================
-# Exemple 1 : Rechercher des entreprises
+# Exemple 1 : Rechercher des entreprises  [compte SCRAPER]
 # ============================================================
 
 async def exemple_recherche_entreprises():
     """Search for companies and export results to JSON + Excel."""
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="scraper") as browser:
         await SessionManager.load(browser)
         search = CompanySearch(browser.page)
         results = await search.search_and_scrape(
@@ -44,12 +58,12 @@ async def exemple_recherche_entreprises():
 
 
 # ============================================================
-# Exemple 2 : Rechercher des offres d'emploi
+# Exemple 2 : Rechercher des offres d'emploi  [compte SCRAPER]
 # ============================================================
 
 async def exemple_recherche_emplois():
     """Search for job offers and export results to JSON + Excel."""
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="scraper") as browser:
         await SessionManager.load(browser)
         search = JobSearch(browser.page)
         results = await search.search_and_scrape(
@@ -63,9 +77,8 @@ async def exemple_recherche_emplois():
         ExportUtils.to_json_and_excel(results, "output/jobs", "Offres")
 
 
-
 # ============================================================
-# Exemple 4 : Employés d'une entreprise
+# Exemple 4 : Employés d'une entreprise  [compte SCRAPER]
 # ============================================================
 
 async def exemple_employes(company_url: str):
@@ -75,7 +88,7 @@ async def exemple_employes(company_url: str):
         company_url: LinkedIn company URL, e.g.
                      "https://www.linkedin.com/company/COMPANY_SLUG/"
     """
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="scraper") as browser:
         await SessionManager.load(browser)
         scraper = PeopleScraper(browser.page)
         results = await scraper.scrape_company_people(
@@ -87,7 +100,7 @@ async def exemple_employes(company_url: str):
 
 
 # ============================================================
-# Exemple 5 : Posts d'une entreprise
+# Exemple 5 : Posts d'une entreprise  [compte SCRAPER]
 # ============================================================
 
 async def exemple_posts(company_url: str):
@@ -97,7 +110,7 @@ async def exemple_posts(company_url: str):
         company_url: LinkedIn company URL, e.g.
                      "https://www.linkedin.com/company/COMPANY_SLUG/"
     """
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="scraper") as browser:
         await SessionManager.load(browser)
         scraper = PostsScraper(browser.page)
         results = await scraper.scrape(
@@ -107,9 +120,64 @@ async def exemple_posts(company_url: str):
         ExportUtils.to_json_and_excel(results, "output/posts", "Posts")
 
 
+# ============================================================
+# Exemple 6 : Ajouter une personne en contact  [compte MAIN]
+# ============================================================
+
+async def exemple_ajouter_contact(
+    profile_url: str,
+    note: str = "",
+):
+    """
+    Envoie une demande de connexion à une personne et met à jour
+    le fichier Excel de suivi (output/connections.xlsx).
+
+    Si la personne est déjà dans le fichier, son entrée est mise à jour
+    (is_following_back, last_updated) sans remettre à zéro la date d'ajout.
+
+    Args:
+        profile_url : URL complète du profil LinkedIn.
+                      Ex: "https://www.linkedin.com/in/john-doe/"
+        note        : Message personnalisé optionnel (max 300 caractères).
+                      Laisse vide pour envoyer sans note.
+    """
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        cm = ConnectionManager(browser.page)
+        result = await cm.add_connection(profile_url=profile_url, note=note)
+        print(f"\n  Résultat : {result}")
+
 
 # ============================================================
-# Exemple 7 : Envoyer un message
+# Exemple 6b : Ajout en masse  [compte MAIN]
+# ============================================================
+
+async def exemple_ajouter_contacts_bulk(
+    profile_urls: list[str],
+    note: str = "",
+):
+    """
+    Envoie des demandes de connexion à plusieurs profils avec délai anti-ban.
+    Le fichier output/connections.xlsx est mis à jour après chaque invitation.
+
+    Args:
+        profile_urls : Liste d'URLs de profils LinkedIn.
+        note         : Message optionnel joint à toutes les invitations.
+    """
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        cm = ConnectionManager(browser.page)
+        results = await cm.add_connections_bulk(
+            profile_urls=profile_urls,
+            note=note,
+            delay_between=(10, 25),
+            max_invitations=20,
+        )
+        print(f"\n  {len(results)} profil(s) traité(s).")
+
+
+# ============================================================
+# Exemple 7 : Envoyer un message  [compte MAIN]
 # ============================================================
 
 async def exemple_message(profile_url: str, message: str):
@@ -120,7 +188,7 @@ async def exemple_message(profile_url: str, message: str):
                      "https://www.linkedin.com/in/PROFILE_SLUG/"
         message:     Text of the message to send.
     """
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="main") as browser:
         await SessionManager.load(browser)
         messenger = LinkedInMessenger(browser.page)
         success = await messenger.send_message(
@@ -130,7 +198,7 @@ async def exemple_message(profile_url: str, message: str):
 
 
 # ============================================================
-# Exemple 8 : Envoi en masse
+# Exemple 8 : Envoi en masse  [compte MAIN]
 # ============================================================
 
 async def exemple_messages_bulk(contacts: list[dict]):
@@ -146,7 +214,7 @@ async def exemple_messages_bulk(contacts: list[dict]):
                       },
                   ]
     """
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="main") as browser:
         await SessionManager.load(browser)
         messenger = LinkedInMessenger(browser.page)
         results = await messenger.send_messages_bulk(
@@ -172,7 +240,7 @@ async def pipeline_entreprises(
     max_posts: int = 10,
 ):
     """
-    Pipeline complet :
+    Pipeline complet [compte SCRAPER] :
       1. Recherche et scrape les entreprises correspondant aux filtres.
       2. Pour chaque entreprise trouvée dans le JSON sauvegardé,
          scrape ses posts ET ses employés avec les filtres fournis.
@@ -184,11 +252,11 @@ async def pipeline_entreprises(
         taille:        Tailles d'entreprise (ex: ["11-50", "51-200"]).
         keywords:      Mots-clés pour la recherche d'entreprises.
         max_companies: Nombre maximum d'entreprises à traiter.
-        filtre_poste:  Filtre sur le titre de poste pour les employés (ex: "developer").
+        filtre_poste:  Filtre sur le titre de poste pour les employés.
         max_personnes: Nombre maximum d'employés à scraper par entreprise.
         max_posts:     Nombre maximum de posts à scraper par entreprise.
     """
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=False, account="scraper") as browser:
         await SessionManager.load(browser)
 
         # ── Étape 1 : Recherche + scrape des entreprises ────────────────
@@ -264,17 +332,40 @@ async def pipeline_entreprises(
 # ============================================================
 
 if __name__ == "__main__":
+    # ──────────────────────────────────────────────────────────────────────
+    # Compte SCRAPER (burner) — scraping uniquement
+    # ──────────────────────────────────────────────────────────────────────
+
     # --- Example 1: Search companies ---
-    #asyncio.run(exemple_recherche_entreprises())
+    # asyncio.run(exemple_recherche_entreprises())
 
     # --- Example 2: Search jobs ---
-    #asyncio.run(exemple_recherche_emplois())
+    # asyncio.run(exemple_recherche_emplois())
 
     # --- Example 4: Scrape employees ---
     # asyncio.run(exemple_employes("https://www.linkedin.com/company/datasulting/"))
 
     # --- Example 5: Scrape posts ---
     # asyncio.run(exemple_posts("https://www.linkedin.com/company/Datasulting/"))
+
+    # --- Pipeline complet : recherche entreprises → posts + employés ---
+    # asyncio.run(pipeline_entreprises(pays="france",secteur="conseil",taille=["11-50", "51-200"],keywords="",max_companies=10,filtre_poste="",max_personnes=10,max_posts=5))
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Compte MAIN (principal) — actions sensibles
+    # ──────────────────────────────────────────────────────────────────────
+
+    # --- Example 6: Ajouter un contact ---
+    asyncio.run(exemple_ajouter_contact(profile_url="https://www.linkedin.com/in/lucas-congras-80180b3b6/", note="Bonjour, je souhaite rejoindre votre réseau."))
+
+    # --- Example 6b: Ajout en masse ---
+    # asyncio.run(exemple_ajouter_contacts_bulk(
+    #     profile_urls=[
+    #         "https://www.linkedin.com/in/john-doe/",
+    #         "https://www.linkedin.com/in/jane-smith/",
+    #     ],
+    #     note="Bonjour, je souhaite rejoindre votre réseau.",   # optionnel
+    # ))
 
     # --- Example 7: Send a message ---
     # asyncio.run(exemple_message(
@@ -289,16 +380,4 @@ if __name__ == "__main__":
     #         "message": "Bonjour, je vous contacte car...",
     #     },
     # ]))
-
-    # --- Pipeline complet : recherche entreprises → posts + employés ---
-    asyncio.run(pipeline_entreprises(
-        pays="france",
-        secteur="conseil",
-        taille=["11-50", "51-200"],
-        keywords="",
-        max_companies=10,
-        filtre_poste="",        # ex: "developer", "manager", ...
-        max_personnes=10,
-        max_posts=5,
-    ))
 

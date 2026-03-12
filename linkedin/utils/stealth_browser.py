@@ -1,30 +1,63 @@
 """
 StealthBrowser — BrowserManager avec protection anti-détection bot.
 Remplace 'BrowserManager' de linkedin-scraper dans tout le projet.
+
+Comptes disponibles :
+  - "main"    → linkedin_session_main.json    (compte principal : messages, candidatures)
+  - "scraper" → linkedin_session_scraper.json (compte burner : scraping uniquement)
+
+Rétrocompatibilité : si session_path est fourni explicitement, il est prioritaire.
 """
 import json
 import os
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
+# Fichier de session par défaut (rétrocompatibilité)
 SESSION_FILE = "linkedin_session.json"
+
+# Fichiers de session par compte
+SESSION_FILES = {
+    "main":    "linkedin_session_main.json",
+    "scraper": "linkedin_session_scraper.json",
+}
 
 
 class StealthBrowser:
     """
     Contexte async qui lance Chromium en mode furtif.
     S'utilise exactement comme BrowserManager :
-        async with StealthBrowser(headless=False) as browser:
+        async with StealthBrowser(headless=False, account="scraper") as browser:
             await SessionManager.load(browser)
             ...
 
-    Passe session_path pour charger une session sauvegardée dès le démarrage
-    (méthode recommandée Playwright : storage_state dans new_context).
+    Paramètres :
+        headless     : True pour mode sans tête.
+        session_path : Chemin explicite vers le fichier de session JSON.
+                       Si fourni, prioritaire sur account.
+        account      : "main" ou "scraper". Détermine automatiquement session_path
+                       si session_path n'est pas fourni explicitement.
+                       Défaut : "main" (rétrocompatibilité).
     """
 
-    def __init__(self, headless: bool = False, session_path: str = SESSION_FILE):
+    def __init__(
+        self,
+        headless: bool = False,
+        session_path: str = "",
+        account: str = "main",
+    ):
         self.headless = headless
-        self.session_path = session_path
+        # Résolution du chemin de session :
+        # 1. session_path explicite → utilisé tel quel
+        # 2. account connu          → SESSION_FILES[account]
+        # 3. Fallback               → SESSION_FILE (linkedin_session.json)
+        if session_path:
+            self.session_path = session_path
+        elif account in SESSION_FILES:
+            self.session_path = SESSION_FILES[account]
+        else:
+            self.session_path = SESSION_FILE
+        self.account = account
         self._playwright = None
         self._browser = None
         self.context = None
