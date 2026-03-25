@@ -126,6 +126,7 @@ class JobScraper:
             "employment_type":  None,
             "job_function":     None,
             "industries":       None,
+            "easy_apply":       False,
         }
 
         try:
@@ -334,6 +335,9 @@ class JobScraper:
 
         # --- Critères (séniorité, type contrat, fonction, secteur) ---
         await self._extract_criteria(result)
+
+        # --- Candidature simplifiée (Easy Apply) ---
+        await self._detect_easy_apply(result)
 
 
     # ------------------------------------------------------------------
@@ -668,3 +672,76 @@ class JobScraper:
             )
             if m:
                 result["description"] = _strip_tags(m.group(1))
+
+    # ------------------------------------------------------------------
+    # Détection Candidature simplifiée / Easy Apply
+    # ------------------------------------------------------------------
+
+    async def _detect_easy_apply(self, result: dict) -> None:
+        """
+        Détecte si l'offre propose une candidature simplifiée (Easy Apply).
+        Remplit result["easy_apply"] = True si détecté.
+
+        Stratégies :
+          1. Présence du bouton Easy Apply / Candidature simplifiée (CSS selectors)
+          2. Attribut aria-label contenant "Easy Apply" ou "Candidature simplifiée"
+          3. Fallback HTML : recherche textuelle dans le contenu brut
+        """
+        page = self.page
+
+        # Sélecteurs CSS connus pour le bouton Easy Apply (LinkedIn FR + EN)
+        easy_apply_selectors = [
+            # Nouvelle UI SDUI 2025
+            "button[aria-label*='Easy Apply']",
+            "button[aria-label*='Candidature simplifiée']",
+            "button[aria-label*='easy apply' i]",
+            "button[aria-label*='candidature simplifi' i]",
+            # Classes spécifiques LinkedIn
+            ".jobs-apply-button--top-card",
+            "button.jobs-apply-button",
+            # Ancienne UI
+            ".jobs-unified-top-card__content--two-pane button.artdeco-button--primary",
+        ]
+
+        for sel in easy_apply_selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    label = (await loc.get_attribute("aria-label") or "").lower()
+                    text  = (await loc.inner_text()).strip().lower()
+                    if any(kw in label or kw in text for kw in [
+                        "easy apply", "candidature simplifiée", "candidature simplifiee",
+                        "postuler facilement",
+                    ]):
+                        result["easy_apply"] = True
+                        return
+                    # Si pas de texte explicite, vérifier que le bouton n'est PAS
+                    # un bouton de redirection externe (qui ouvrirait un autre site)
+                    # → on marque True si c'est un bouton primary sans href
+                    if "jobs-apply-button" in sel:
+                        href = await loc.get_attribute("href")
+                        if href is None:  # bouton natif LinkedIn = Easy Apply
+                            result["easy_apply"] = True
+                            return
+            except Exception:
+                continue
+
+        # Fallback : analyse du HTML brut
+        try:
+            html = await page.content()
+            easy_apply_patterns = [
+                r'easy\s*apply',
+                r'candidature\s*simplifi',
+                r'postuler\s*facilement',
+                r'data-job-application-type\s*=\s*["\']EASY_APPLY["\']',
+                r'"easyApplyUrl"\s*:',
+                r'easy-apply',
+            ]
+            html_lower = html.lower()
+            for pattern in easy_apply_patterns:
+                if re.search(pattern, html_lower, re.IGNORECASE):
+                    result["easy_apply"] = True
+                    return
+        except Exception:
+            pass
+

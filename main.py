@@ -36,6 +36,7 @@ from linkedin.search.company_search import CompanySearch
 from linkedin.search.job_search import JobSearch
 from linkedin.actions.messenger import LinkedInMessenger
 from linkedin.actions.connection_manager import ConnectionManager
+from linkedin.actions.easy_apply import EasyApply
 
 
 # ============================================================
@@ -226,6 +227,159 @@ async def exemple_messages_bulk(contacts: list[dict]):
 
 
 # ============================================================
+# Exemple 9 : Postuler sur une offre Candidature simplifiée  [compte MAIN]
+# ============================================================
+
+async def exemple_postuler(
+    job_url: str,
+    cv_path: str,
+    cover_letter_path: str | None = None,
+    phone: str = "",
+    default_answers: dict | None = None,
+):
+    """
+    Postule automatiquement sur une offre LinkedIn en Candidature simplifiée.
+
+    Le résultat est sauvegardé dans output/applications.xlsx.
+
+    Args:
+        job_url:           URL complète de l'offre LinkedIn.
+                           Ex: "https://www.linkedin.com/jobs/view/1234567890/"
+        cv_path:           Chemin absolu vers le CV (PDF ou DOCX).
+        cover_letter_path: Chemin vers la lettre de motivation (optionnel).
+        phone:             Numéro de téléphone pour les champs du formulaire.
+        default_answers:   Réponses automatiques aux questions du formulaire.
+                           Ex: {"années d'expérience": "3", "salaire souhaité": "45000"}
+    """
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        ea = EasyApply(
+            page=browser.page,
+            cv_path=cv_path,
+            cover_letter_path=cover_letter_path,
+            phone=phone,
+            default_answers=default_answers or {},
+        )
+        result = await ea.apply(job_url)
+        print(f"\n  Résultat : {result['status']} — {result.get('title', '?')} @ {result.get('company', '?')}")
+
+
+# ============================================================
+# Exemple 9b : Postuler en masse (Candidatures simplifiées)  [compte MAIN]
+# ============================================================
+
+async def exemple_postuler_bulk(
+    job_urls: list[str],
+    cv_path: str,
+    cover_letter_path: str | None = None,
+    phone: str = "",
+    default_answers: dict | None = None,
+    max_applications: int = 10,
+):
+    """
+    Postule automatiquement sur une liste d'offres LinkedIn en Candidature simplifiée.
+
+    Le suivi de toutes les candidatures est sauvegardé dans output/applications.xlsx.
+    Les offres déjà postulées (dans le fichier de suivi) sont automatiquement ignorées.
+
+    Args:
+        job_urls:          Liste d'URLs d'offres LinkedIn.
+        cv_path:           Chemin absolu vers le CV (PDF ou DOCX).
+        cover_letter_path: Chemin vers la lettre de motivation (optionnel).
+        phone:             Numéro de téléphone pour les champs du formulaire.
+        default_answers:   Réponses automatiques aux questions du formulaire.
+        max_applications:  Nombre maximum de candidatures à déposer (défaut : 10).
+    """
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        ea = EasyApply(
+            page=browser.page,
+            cv_path=cv_path,
+            cover_letter_path=cover_letter_path,
+            phone=phone,
+            default_answers=default_answers or {},
+        )
+        results = await ea.apply_bulk(
+            job_urls=job_urls,
+            delay_between=(12, 30),
+            max_applications=max_applications,
+        )
+        n_applied = sum(1 for r in results if r.get("status") == "applied")
+        print(f"\n  ✅ {n_applied}/{len(results)} candidature(s) déposée(s). Suivi : output/applications.xlsx")
+
+
+# ============================================================
+# Exemple 9c : Rechercher + postuler (Easy Apply)  [SCRAPER + MAIN]
+# ============================================================
+
+async def exemple_rechercher_et_postuler(
+    keywords: str,
+    cv_path: str,
+    cover_letter_path: str | None = None,
+    phone: str = "",
+    pays: str = "france",
+    type_contrat: list | None = None,
+    max_offres: int = 10,
+    max_applications: int = 5,
+    default_answers: dict | None = None,
+):
+    """
+    Pipeline complet : recherche les offres Easy Apply puis postule automatiquement.
+
+    Étape 1 [compte SCRAPER] : recherche les offres avec le filtre Easy Apply activé.
+    Étape 2 [compte MAIN]    : postule sur chaque offre trouvée.
+
+    Args:
+        keywords:          Mots-clés de recherche (ex: "data analyst").
+        cv_path:           Chemin absolu vers le CV.
+        cover_letter_path: Chemin vers la lettre de motivation (optionnel).
+        phone:             Numéro de téléphone.
+        pays:              Pays de recherche (ex: "france").
+        type_contrat:      Types de contrat (ex: ["cdi", "cdd"]).
+        max_offres:        Nombre max d'offres à récupérer.
+        max_applications:  Nombre max de candidatures à déposer.
+        default_answers:   Réponses automatiques aux questions.
+    """
+    # ── Étape 1 : Recherche des offres Easy Apply [compte SCRAPER] ────────
+    print("\n═══ ÉTAPE 1 : Recherche des offres Easy Apply ═══")
+    job_urls: list[str] = []
+    async with BrowserManager(headless=False, account="scraper") as browser:
+        await SessionManager.load(browser)
+        search = JobSearch(browser.page)
+        job_urls = await search.search(
+            keywords=keywords,
+            pays=pays,
+            type_contrat=type_contrat or [],
+            max_offres=max_offres,
+            easy_apply_only=True,
+        )
+    print(f"  → {len(job_urls)} offre(s) Easy Apply trouvée(s).")
+
+    if not job_urls:
+        print("  Aucune offre trouvée. Arrêt.")
+        return
+
+    # ── Étape 2 : Candidatures [compte MAIN] ──────────────────────────────
+    print("\n═══ ÉTAPE 2 : Dépôt des candidatures ═══")
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        ea = EasyApply(
+            page=browser.page,
+            cv_path=cv_path,
+            cover_letter_path=cover_letter_path,
+            phone=phone,
+            default_answers=default_answers or {},
+        )
+        results = await ea.apply_bulk(
+            job_urls=job_urls,
+            delay_between=(12, 30),
+            max_applications=max_applications,
+        )
+        n_applied = sum(1 for r in results if r.get("status") == "applied")
+        print(f"\n  ✅ {n_applied}/{len(results)} candidature(s) déposée(s). Suivi : output/applications.xlsx")
+
+
+# ============================================================
 # Pipeline complet : recherche entreprises → posts + employés
 # ============================================================
 
@@ -356,7 +510,7 @@ if __name__ == "__main__":
     # ──────────────────────────────────────────────────────────────────────
 
     # --- Example 6: Ajouter un contact ---
-    asyncio.run(exemple_ajouter_contact(profile_url="https://www.linkedin.com/in/lucas-congras-80180b3b6/", note="Bonjour, je souhaite rejoindre votre réseau."))
+    # asyncio.run(exemple_ajouter_contact(profile_url="https://www.linkedin.com/in/lucas-congras-80180b3b6/", note="Bonjour, je souhaite rejoindre votre réseau."))
 
     # --- Example 6b: Ajout en masse ---
     # asyncio.run(exemple_ajouter_contacts_bulk(
@@ -380,4 +534,52 @@ if __name__ == "__main__":
     #         "message": "Bonjour, je vous contacte car...",
     #     },
     # ]))
+
+    # --- Example 9: Postuler sur une offre Easy Apply ---
+    asyncio.run(exemple_postuler(
+         job_url="https://www.linkedin.com/jobs/view/4368989325/",
+         cv_path=r"C:\Users\LucasCONGRAS\OneDrive - datasulting.com\Bureau\EPF\International - Suede\CV - LM\CV Anglais.pdf",
+         cover_letter_path=r"C:\Users\LucasCONGRAS\OneDrive - datasulting.com\Bureau\EPF\International - Suede\CV - LM\Lettre de Motivation - Lucas Congras - Anglais.docx",  # optionnel
+         phone="0612345678",
+         default_answers={
+             "années d'expérience": "3",
+             "salaire": "45000",
+             # Champs de dates (visas, disponibilités, périodes de travail...)
+             # Clé = fragment du label du select (insensible à la casse)
+             # Valeur = texte exact de l'option à sélectionner
+             "mois : from": "Septembre",   # Mois de début
+             "année : from": "2026",       # Année de début
+             "mois : to": "Mars",          # Mois de fin
+             "année : to": "2027",         # Année de fin (ou année en cours si "en poste")
+         },
+     ))
+
+    # --- Example 9b: Postuler en masse sur des offres Easy Apply ---
+    # asyncio.run(exemple_postuler_bulk(
+    #     job_urls=[
+    #         "https://www.linkedin.com/jobs/view/1234567890/",
+    #         "https://www.linkedin.com/jobs/view/9876543210/",
+    #     ],
+    #     cv_path="C:/Users/LucasCONGRAS/Documents/CV_Lucas_Congras.pdf",
+    #     cover_letter_path="C:/Users/LucasCONGRAS/Documents/Lettre_Motivation.pdf",  # optionnel
+    #     phone="0612345678",
+    #     max_applications=10,
+    # ))
+
+    # --- Example 9c: Rechercher + postuler automatiquement (Easy Apply) ---
+    # asyncio.run(exemple_rechercher_et_postuler(
+    #     keywords="data analyst",
+    #     cv_path="C:/Users/LucasCONGRAS/Documents/CV_Lucas_Congras.pdf",
+    #     cover_letter_path="C:/Users/LucasCONGRAS/Documents/Lettre_Motivation.pdf",  # optionnel
+    #     phone="0612345678",
+    #     pays="france",
+    #     type_contrat=["cdi"],
+    #     max_offres=20,
+    #     max_applications=5,
+    #     default_answers={
+    #         "années d'expérience": "3",
+    #         "salaire souhaité": "45000",
+    #         "disponibilité": "immédiatement",
+    #     },
+    # ))
 

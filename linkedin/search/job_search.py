@@ -36,6 +36,7 @@ class JobSearch:
         type_contrat: list | None = None,
         niveau_experience: list | None = None,
         page: int = 0,
+        easy_apply_only: bool = False,
     ) -> str:
         """
         Build a LinkedIn jobs search URL.
@@ -48,6 +49,7 @@ class JobSearch:
             type_contrat:      List of contract types (e.g. ["cdi"]).
             niveau_experience: List of experience levels (e.g. ["junior"]).
             page:              Page offset (0-based).
+            easy_apply_only:   If True, filter by Easy Apply / Candidature simplifiée.
 
         Returns:
             Full search URL string.
@@ -71,6 +73,8 @@ class JobSearch:
             parts.append(f"f_JT={','.join(job_type_codes)}")
         if exp_codes:
             parts.append(f"f_E={','.join(exp_codes)}")
+        if easy_apply_only:
+            parts.append("f_LF=f_WRA")  # LinkedIn Easy Apply filter
         if page > 0:
             parts.append(f"start={page * 25}")
 
@@ -90,6 +94,7 @@ class JobSearch:
         type_contrat: list | None = None,
         niveau_experience: list | None = None,
         max_offres: int = 20,
+        easy_apply_only: bool = False,
     ) -> list[str]:
         """
         Collect job offer LinkedIn URLs matching the given filters.
@@ -102,6 +107,7 @@ class JobSearch:
             type_contrat:      Contract type filter.
             niveau_experience: Experience level filter.
             max_offres:        Maximum number of job URLs to return.
+            easy_apply_only:   If True, add the LinkedIn Easy Apply filter (f_LF=f_WRA).
 
         Returns:
             List of job offer URLs.
@@ -114,6 +120,7 @@ class JobSearch:
                 keywords, pays, date_publiee,
                 mode_travail, type_contrat, niveau_experience,
                 page=page_num,
+                easy_apply_only=easy_apply_only,
             )
             await self.page.goto(search_url, wait_until="domcontentloaded")
             await asyncio.sleep(random.uniform(2, 3))
@@ -143,6 +150,7 @@ class JobSearch:
         type_contrat: list | None = None,
         niveau_experience: list | None = None,
         max_offres: int = 20,
+        easy_apply_only: bool = False,
     ) -> list[dict]:
         """
         Search for job offers then scrape details for each result.
@@ -155,14 +163,16 @@ class JobSearch:
             type_contrat:      Contract type filter.
             niveau_experience: Experience level filter.
             max_offres:        Maximum number of job offers to return.
+            easy_apply_only:   If True, restrict results to Easy Apply offers only.
 
         Returns:
-            List of job detail dicts.
+            List of job detail dicts (includes "easy_apply" boolean field).
         """
         urls = await self.search(
             keywords, pays, date_publiee,
             mode_travail, type_contrat, niveau_experience,
             max_offres,
+            easy_apply_only=easy_apply_only,
         )
         scraper = JobScraper(self.page, self.page.context)
         results = []
