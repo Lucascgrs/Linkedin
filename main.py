@@ -25,11 +25,13 @@ Architecture dual-session :
     └─────────────────────────────────────────────────────────┘
 """
 import asyncio
+import os
 
 from linkedin.utils.stealth_browser import StealthBrowser as BrowserManager
-
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
+from linkedin.utils.file_manager import FileManager
+from linkedin.utils.ai_manager import AIManager
 from linkedin.scrapers.people_scraper import PeopleScraper
 from linkedin.scrapers.posts_scraper import PostsScraper
 from linkedin.search.company_search import CompanySearch
@@ -482,6 +484,108 @@ async def pipeline_entreprises(
 
 
 # ============================================================
+# Exemple 10 : Postuler avec lettre de motivation améliorée par IA  [compte MAIN]
+# ============================================================
+
+async def exemple_postuler_avec_lm_ia(
+    job_url: str,
+    cv_path: str,
+    original_cover_letter_path: str,
+    position_name: str,
+    company_info: dict,
+    personal_info: dict,
+    ai_instructions: str = "",
+    phone: str = "",
+    default_answers: dict | None = None,
+    output_dir: str | None = None,
+    convert_pdf: bool = True,
+) -> dict:
+    """
+    Pipeline complet de candidature avec amélioration IA de la lettre de motivation.
+
+    Étapes :
+      1. Lecture de la lettre de motivation originale (.docx) via FileManager.
+      2. Amélioration du texte par Claude (AIManager) selon le poste et l'entreprise.
+      3. Sauvegarde de la nouvelle version en .docx et (optionnel) en PDF via FileManager.
+         L'original n'est JAMAIS écrasé.
+      4. Soumission de la candidature via EasyApply avec la nouvelle lettre.
+
+    Args:
+        job_url:                     URL de l'offre LinkedIn.
+        cv_path:                     Chemin absolu vers le CV (PDF ou DOCX).
+        original_cover_letter_path:  Chemin absolu vers la lettre de motivation template (.docx).
+        position_name:               Intitulé du poste — sert à nommer les fichiers générés.
+                                     Exemple : "Data Scientist"
+                                     → lettre_motivation_DataScientist.docx
+        company_info:                Informations entreprise/poste passées à l'IA.
+                                     Clés utiles : "name", "sector", "job_title", "job_description".
+        personal_info:               Informations candidat passées à l'IA.
+                                     Clés utiles : "name", "degree", "skills", "experiences".
+        ai_instructions:             Instructions supplémentaires optionnelles pour le modèle
+                                     (ex. "Insister sur Python et la gestion de projet").
+        phone:                       Numéro de téléphone pour le formulaire Easy Apply.
+        default_answers:             Réponses automatiques aux questions du formulaire.
+        output_dir:                  Dossier de destination pour les fichiers générés.
+                                     Si None, utilise le dossier de la lettre originale.
+        convert_pdf:                 Si True, génère aussi un PDF de la lettre.
+
+    Returns:
+        Dict résultat de la candidature (status, title, company, …).
+    """
+    print("\n" + "═" * 60)
+    print("  PIPELINE : Candidature avec lettre de motivation IA")
+    print("═" * 60)
+
+    # ── Étape 1 : Lecture de la lettre originale ──────────────────
+    print("\n[1/4] Lecture de la lettre originale...")
+    original_text = FileManager.read_docx(original_cover_letter_path)
+    print(f"  ✓ {len(original_text)} caractères lus depuis {original_cover_letter_path}")
+
+    # ── Étape 2 : Amélioration par l'IA ──────────────────────────
+    print("\n[2/4] Amélioration par l'IA...")
+    ai = AIManager(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    improved_text = ai.improve_cover_letter(
+        cover_letter_content=original_text,
+        company_info=company_info,
+        personal_info=personal_info,
+        instructions=ai_instructions,
+    )
+    print(f"  ✓ Lettre améliorée ({len(improved_text)} caractères)")
+
+    # ── Étape 3 : Sauvegarde des fichiers générés ────────────────
+    print("\n[3/4] Sauvegarde des fichiers...")
+    paths = FileManager.process_cover_letter(
+        original_docx_path=original_cover_letter_path,
+        new_content=improved_text,
+        position_name=position_name,
+        output_dir=output_dir,
+        convert_pdf=convert_pdf,
+    )
+    cover_letter_for_apply = paths["pdf"] if paths["pdf"] else paths["docx"]
+
+    # ── Étape 4 : Soumission de la candidature ───────────────────
+    print("\n[4/4] Soumission de la candidature LinkedIn...")
+    async with BrowserManager(headless=False, account="main") as browser:
+        await SessionManager.load(browser)
+        ea = EasyApply(
+            page=browser.page,
+            cv_path=cv_path,
+            cover_letter_path=cover_letter_for_apply,
+            phone=phone,
+            default_answers=default_answers or {},
+        )
+        result = await ea.apply(job_url)
+
+    status_icon = {"applied": "✅", "already_applied": "🔗", "failed": "❌", "skipped": "⏭"}.get(
+        result.get("status", ""), "?"
+    )
+    print(f"\n{status_icon} Résultat : {result.get('status')} — "
+          f"{result.get('title', '?')} @ {result.get('company', '?')}")
+    print("═" * 60)
+    return result
+
+
+# ============================================================
 # Entry point — uncomment the example you want to run
 # ============================================================
 
@@ -581,5 +685,31 @@ if __name__ == "__main__":
     #         "salaire souhaité": "45000",
     #         "disponibilité": "immédiatement",
     #     },
+    # ))
+
+    # --- Example 10: Postuler avec lettre de motivation améliorée par IA ---
+    # Prérequis : définir la variable d'environnement ANTHROPIC_API_KEY
+    #             ou passer api_key= directement à AIManager dans la fonction.
+    # asyncio.run(exemple_postuler_avec_lm_ia(
+    #     job_url="https://www.linkedin.com/jobs/view/1234567890/",
+    #     cv_path=r"C:\Users\LucasCONGRAS\Documents\CV_Lucas_Congras.pdf",
+    #     original_cover_letter_path=r"C:\Users\LucasCONGRAS\Documents\Lettre_Motivation.docx",
+    #     position_name="Data Scientist",          # utilisé pour nommer les fichiers générés
+    #     company_info={
+    #         "name": "Acme Corp",
+    #         "sector": "SaaS / Technologie",
+    #         "job_title": "Data Scientist",
+    #         "job_description": "Développement de modèles ML, analyse de données...",
+    #     },
+    #     personal_info={
+    #         "name": "Lucas Congras",
+    #         "degree": "MSc Data Science - EPF",
+    #         "skills": "Python, Machine Learning, SQL, Power BI",
+    #         "experiences": "Stage data analyst 6 mois, alternance data engineer 1 an",
+    #     },
+    #     ai_instructions="Insister sur les compétences en ML et la capacité d'adaptation.",
+    #     phone="0612345678",
+    #     output_dir=r"C:\Users\LucasCONGRAS\Documents\Candidatures",
+    #     convert_pdf=True,
     # ))
 

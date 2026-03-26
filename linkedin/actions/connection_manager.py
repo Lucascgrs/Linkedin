@@ -3,10 +3,10 @@ ConnectionManager — envoie des demandes de connexion LinkedIn et tient un
 fichier Excel persistant à jour avec les infos des personnes ajoutées.
 
 Fonctionnalités :
-  - add_connection(profile_url)          : ajoute une personne par URL
-  - add_connections_bulk(urls)           : ajout en masse avec délai anti-ban
-  - check_follow_back(profile_url)       : vérifie si la personne te suit
-  - get_connections_df()                 : retourne le DataFrame courant
+  - add_connection(profile_url)     : ajoute une personne par URL
+  - add_connections_bulk(urls)      : ajout en masse avec délai anti-ban
+  - check_follow_back(profile_url)  : vérifie si la personne te suit
+  - get_connections_list()          : retourne la liste des contacts enregistrés
 
 Fichier Excel de suivi :
   output/connections.xlsx  (créé si absent, mis à jour sinon — jamais remis à zéro)
@@ -15,12 +15,17 @@ Colonnes :
   profile_url | name | title | location | date_added | is_following_back | last_updated
 """
 import asyncio
+import logging
 import os
 import random
 from datetime import datetime
 
+from linkedin.utils.export import ExportUtils
+
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# Helpers Excel (openpyxl — déjà utilisé dans le projet)
+# Constantes du fichier de suivi
 # ---------------------------------------------------------------------------
 CONNECTIONS_FILE = os.path.join("output", "connections.xlsx")
 SHEET_NAME = "Connections"
@@ -33,75 +38,6 @@ COLUMNS = [
     "is_following_back",
     "last_updated",
 ]
-
-
-def _load_existing(filepath: str) -> list[dict]:
-    """Charge le fichier Excel existant et retourne une liste de dicts.
-    Retourne une liste vide si le fichier n'existe pas encore."""
-    if not os.path.exists(filepath):
-        return []
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(filepath)
-        ws = wb.active
-        headers = [cell.value for cell in ws[1]]
-        rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if any(v is not None for v in row):
-                rows.append(dict(zip(headers, row)))
-        return rows
-    except Exception as e:
-        print(f"  ⚠️  Impossible de lire {filepath} : {e}")
-        return []
-
-
-def _save_excel(data: list[dict], filepath: str) -> None:
-    """Sauvegarde la liste de dicts dans un fichier Excel.
-    Crée le dossier parent si nécessaire."""
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-
-    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = SHEET_NAME
-
-    # En-têtes
-    ws.append(COLUMNS)
-    header_fill = PatternFill("solid", fgColor="1F4E79")
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-    ws.freeze_panes = "A2"
-
-    # Données
-    for row in data:
-        ws.append([row.get(col, "") for col in COLUMNS])
-
-    # Largeurs auto
-    for col in ws.columns:
-        max_len = max(
-            (len(str(cell.value)) if cell.value is not None else 0)
-            for cell in col
-        )
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
-
-    wb.save(filepath)
-    print(f"  💾 Excel mis à jour : {filepath} ({len(data)} entrée(s))")
-
-
-def _upsert(records: list[dict], new_record: dict) -> list[dict]:
-    """Insère ou met à jour un enregistrement dans la liste selon profile_url."""
-    url = new_record.get("profile_url", "").rstrip("/")
-    for i, r in enumerate(records):
-        if r.get("profile_url", "").rstrip("/") == url:
-            records[i] = new_record  # mise à jour
-            return records
-    records.append(new_record)  # insertion
-    return records
-
 
 # ---------------------------------------------------------------------------
 # ConnectionManager
@@ -121,7 +57,7 @@ class ConnectionManager:
     def __init__(self, page, connections_file: str = CONNECTIONS_FILE) -> None:
         self.page = page
         self.connections_file = connections_file
-        self._records: list[dict] = _load_existing(connections_file)
+        self._records: list[dict] = ExportUtils.load_workbook(connections_file)
         print(f"  📂 {len(self._records)} contact(s) existant(s) chargé(s) depuis {connections_file}")
 
     # ------------------------------------------------------------------
@@ -174,8 +110,8 @@ class ConnectionManager:
             info["last_updated"] = now_str
 
             # Persistance
-            self._records = _upsert(self._records, {k: info.get(k, "") for k in COLUMNS})
-            _save_excel(self._records, self.connections_file)
+            self._records = ExportUtils.upsert(self._records, {k: info.get(k, "") for k in COLUMNS}, key_field="profile_url")
+            ExportUtils.save_workbook(self._records, self.connections_file, SHEET_NAME, COLUMNS)
 
             _status_icon = {"sent": "✅", "already_connected": "🔗", "already_sent": "📨", "failed": "❌"}.get(status, "?")
             print(f"  {_status_icon} {info.get('name', '(inconnu)')} — {status}")
@@ -238,8 +174,8 @@ class ConnectionManager:
         if existing:
             existing["is_following_back"] = follows
             existing["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            self._records = _upsert(self._records, existing)
-            _save_excel(self._records, self.connections_file)
+            self._records = ExportUtils.upsert(self._records, existing, key_field="profile_url")
+            ExportUtils.save_workbook(self._records, self.connections_file, SHEET_NAME, COLUMNS)
 
         return follows
 
@@ -258,15 +194,15 @@ class ConnectionManager:
                 "main, .scaffold-layout__main, section.artdeco-card",
                 timeout=15_000,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_wait_for_profile selector timeout: %s", exc)
         await asyncio.sleep(random.uniform(1.5, 2.5))
 
     async def _scrape_profile_info(self) -> dict:
         """Extrait nom, titre et localisation depuis la page profil."""
         info: dict = {"name": "", "title": "", "location": ""}
 
-        # Nom
+        # ── Nom ─────────────────────────────────────────────────
         for sel in [
             "h1.text-heading-xlarge",
             "h1[class*='inline']",
@@ -280,10 +216,10 @@ class ConnectionManager:
                     if text:
                         info["name"] = text
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_scrape_profile_info name selector %s: %s", sel, exc)
 
-        # Titre (headline)
+        # ── Titre (headline) ─────────────────────────────────────
         for sel in [
             ".text-body-medium.break-words",
             ".pv-text-details__left-panel .text-body-medium",
@@ -297,10 +233,10 @@ class ConnectionManager:
                     if text and len(text) > 3:
                         info["title"] = text
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_scrape_profile_info title selector %s: %s", sel, exc)
 
-        # Localisation
+        # ── Localisation ─────────────────────────────────────────
         for sel in [
             ".pv-text-details__left-panel span.text-body-small",
             ".pb2.pv-text-details__left-panel span.text-body-small",
@@ -317,8 +253,8 @@ class ConnectionManager:
                         break
                 if info["location"]:
                     break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_scrape_profile_info location selector %s: %s", sel, exc)
 
         print(f"  📋 Profil : {info['name']} | {info['title']} | {info['location']}")
         return info
@@ -345,7 +281,8 @@ class ConnectionManager:
                 if indicator in page_text:
                     return True
             return False
-        except Exception:
+        except Exception as exc:
+            logger.debug("_check_following_back failed: %s", exc)
             return None
 
     async def _send_connection_request(self, note: str = "") -> str:
@@ -375,7 +312,7 @@ class ConnectionManager:
 
         connect_found = False
 
-        # Étape 1 : sélecteur CSS direct via JS .click()
+        # ── Étape 1 : sélecteur CSS direct via JS .click() ───────
         for sel in connect_selectors:
             try:
                 if await self.page.locator(sel).count() > 0:
@@ -385,12 +322,12 @@ class ConnectionManager:
                     )
                     if clicked:
                         connect_found = True
-                        print(f"  [✓] Bouton 'Se connecter' cliqué.")
+                        print("  [✓] Bouton 'Se connecter' cliqué.")
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("connect selector %s failed: %s", sel, exc)
 
-        # Étape 2 : JS fallback — parcourt tous les boutons primaires
+        # ── Étape 2 : JS fallback — parcourt tous les boutons primaires ──
         if not connect_found:
             try:
                 clicked = await self.page.evaluate("""
@@ -409,10 +346,10 @@ class ConnectionManager:
                 if clicked:
                     connect_found = True
                     print("  [✓] Bouton 'Se connecter' cliqué (JS fallback).")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("connect JS fallback failed: %s", exc)
 
-        # Étape 3 : menu "Plus" (si le bouton est caché derrière)
+        # ── Étape 3 : menu "Plus" (si le bouton est caché derrière) ──
         if not connect_found:
             more_selectors = [
                 'button[aria-label*="Plus d" i]',
@@ -431,8 +368,8 @@ class ConnectionManager:
                             clicked_more = True
                             await asyncio.sleep(random.uniform(0.8, 1.5))
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("more-menu selector %s failed: %s", sel, exc)
 
             if clicked_more:
                 dropdown_selectors = [
@@ -452,10 +389,10 @@ class ConnectionManager:
                                 connect_found = True
                                 print("  [✓] Bouton 'Se connecter' cliqué via menu Plus.")
                                 break
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("dropdown selector %s failed: %s", sel, exc)
 
-        # Aucun bouton cliqué — déterminer le statut réel
+        # ── Aucun bouton cliqué — déterminer le statut réel ──────
         if not connect_found:
             try:
                 page_text = await self.page.evaluate("() => document.body.innerText")
@@ -464,8 +401,8 @@ class ConnectionManager:
                         or "1er degré" in page_text.lower()):
                     print("  [ℹ️] Déjà connecté (1er degré).")
                     return "already_connected"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("already_connected check failed: %s", exc)
 
             pending_selectors = [
                 'button[aria-label*="En attente" i]',
@@ -478,8 +415,8 @@ class ConnectionManager:
                     if await self.page.locator(sel).count() > 0 and await self.page.locator(sel).is_visible():
                         print("  [ℹ️] Invitation déjà en attente.")
                         return "already_sent"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("pending selector %s failed: %s", sel, exc)
 
             print("  [✗] Bouton 'Se connecter' introuvable.")
             return "failed"
@@ -531,8 +468,8 @@ class ConnectionManager:
                             await ta.type(note[:300], delay=random.randint(25, 55))
                             await asyncio.sleep(random.uniform(0.5, 1.0))
                             break
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("note textarea selector %s failed: %s", ts, exc)
 
         # Clic sur Envoyer via JS
         sent = await self.page.evaluate("""

@@ -27,14 +27,19 @@ Paramètres du constructeur :
   headless_mode    : si True, pas de captures d'écran en cas d'échec (défaut : False)
 """
 import asyncio
+import logging
 import os
 import random
 import re
 from datetime import datetime
 from pathlib import Path
 
+from linkedin.utils.export import ExportUtils
+
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# Helpers Excel  (même pattern que connection_manager.py)
+# Constantes du fichier de suivi
 # ---------------------------------------------------------------------------
 APPLICATIONS_FILE = os.path.join("output", "applications.xlsx")
 SHEET_NAME = "Candidatures"
@@ -49,69 +54,6 @@ COLUMNS = [
     "cover_letter_used",
     "notes",
 ]
-
-
-def _load_existing(filepath: str) -> list[dict]:
-    """Charge le fichier Excel existant. Retourne [] si absent."""
-    if not os.path.exists(filepath):
-        return []
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(filepath)
-        ws = wb.active
-        headers = [cell.value for cell in ws[1]]
-        rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if any(v is not None for v in row):
-                rows.append(dict(zip(headers, row)))
-        return rows
-    except Exception as e:
-        print(f"  ⚠️  Impossible de lire {filepath} : {e}")
-        return []
-
-
-def _save_excel(data: list[dict], filepath: str) -> None:
-    """Sauvegarde la liste de dicts dans un fichier Excel formaté."""
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-
-    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = SHEET_NAME
-
-    ws.append(COLUMNS)
-    header_fill = PatternFill("solid", fgColor="1F4E79")
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-    ws.freeze_panes = "A2"
-
-    for row in data:
-        ws.append([row.get(col, "") for col in COLUMNS])
-
-    for col in ws.columns:
-        max_len = max(
-            (len(str(cell.value)) if cell.value is not None else 0)
-            for cell in col
-        )
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 70)
-
-    wb.save(filepath)
-    print(f"  💾 Excel mis à jour : {filepath} ({len(data)} candidature(s))")
-
-
-def _upsert(records: list[dict], new_record: dict) -> list[dict]:
-    """Insère ou met à jour un enregistrement selon job_url."""
-    url = new_record.get("job_url", "").rstrip("/")
-    for i, r in enumerate(records):
-        if r.get("job_url", "").rstrip("/") == url:
-            records[i] = new_record
-            return records
-    records.append(new_record)
-    return records
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +187,7 @@ class EasyApply:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Document '{label}' introuvable : {path}")
 
-        self._records: list[dict] = _load_existing(applications_file)
+        self._records: list[dict] = ExportUtils.load_workbook(applications_file)
         print(f"  📂 {len(self._records)} candidature(s) existante(s) chargée(s) depuis {applications_file}")
 
     # ------------------------------------------------------------------
@@ -1293,5 +1235,5 @@ class EasyApply:
 
     def _persist(self, record: dict) -> None:
         """Upsert le record et sauvegarde le fichier Excel."""
-        self._records = _upsert(self._records, record)
-        _save_excel(self._records, self.applications_file)
+        self._records = ExportUtils.upsert(self._records, record, key_field="job_url")
+        ExportUtils.save_workbook(self._records, self.applications_file, SHEET_NAME, COLUMNS)

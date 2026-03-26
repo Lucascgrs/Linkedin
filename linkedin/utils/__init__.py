@@ -13,6 +13,8 @@ from linkedin.utils.filters import (
 from linkedin.utils.session import SessionManager
 from linkedin.utils.export import ExportUtils
 from linkedin.utils.stealth_browser import StealthBrowser
+from linkedin.utils.file_manager import FileManager
+from linkedin.utils.ai_manager import AIManager
 
 __all__ = [
     "GEO_IDS",
@@ -28,4 +30,6 @@ __all__ = [
     "SessionManager",
     "ExportUtils",
     "StealthBrowser",
+    "FileManager",
+    "AIManager",
 ]
